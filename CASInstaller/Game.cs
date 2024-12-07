@@ -6,6 +6,7 @@ namespace CASInstaller;
 
 public class Game(string product, string branch = "us")
 {
+    private const string cache_dir = "cache";
     private readonly string? _product = product;
     private readonly string? _branch = branch;
     
@@ -28,7 +29,13 @@ public class Game(string product, string branch = "us")
 
     public async Task Install(string installPath)
     {
+        if (!Directory.Exists(cache_dir))
+            Directory.CreateDirectory(cache_dir);
+        
         _installPath = installPath;
+        
+        BLTE.BLTEStream.ThrowOnMissingDecryptionKey = false;
+        KeyService.LoadKeys();
         
         _cdn = await CDN.GetCDN(_product, _branch);
         _cdn?.LogInfo();
@@ -37,7 +44,7 @@ public class Game(string product, string branch = "us")
         _version?.LogInfo();
 
         _productConfig = await ProductConfig.GetProductConfig(_cdn, _version?.ProductConfigHash);
-        ProcessProductConfig(_productConfig);
+        ProcessProductConfig(_productConfig, _installPath);
         
         _buildConfig = await BuildConfig.GetBuildConfig(_cdn, _version?.BuildConfigHash, _data_dir);
         _buildConfig?.LogInfo();
@@ -69,12 +76,12 @@ public class Game(string product, string branch = "us")
         var installContentHash = _buildConfig?.Install[0];
         var installEncodedHash = _buildConfig?.Install[1];
         _install = await InstallManifest.GetInstall(_cdn, installEncodedHash);
+        _install?.Dump("install.txt");
         _install?.LogInfo();
-        
-        await ProcessInstall(_install, _installTags);
+        await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
     }
     
-    private void ProcessProductConfig(ProductConfig? productConfig)
+    private void ProcessProductConfig(ProductConfig? productConfig, string installPath)
     {
         if (productConfig == null)
             return;
@@ -85,7 +92,7 @@ public class Game(string product, string branch = "us")
         _installTags.AddRange(tags);
         _installTags.AddRange(tags_64bit);
         
-        var game_dir = Path.Combine(_installPath, productConfig.all.config.form.game_dir.dirname);
+        var game_dir = Path.Combine(installPath, productConfig.all.config.form.game_dir.dirname);
         _shared_game_dir = Path.Combine(game_dir, productConfig.all.config.shared_container_default_subfolder);
         if (!Directory.Exists(_shared_game_dir))
             Directory.CreateDirectory(_shared_game_dir);
@@ -136,12 +143,13 @@ public class Game(string product, string branch = "us")
         return indexGroup;
     }
     
-    private static async Task ProcessInstall(InstallManifest? install, List<string>? tags)
+    private static async Task ProcessInstall(InstallManifest? install, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags, string? shared_game_dir, bool overrideFiles = false)
     {
-        if (install == null)
+        if (install == null || cdn == null || encoding == null || archiveGroup == null || shared_game_dir == null)
             return;
         
         tags ??= [];
+        tags.Add("enUS");
         
         // Filter entries by tags
         var tagFilteredEntries = new List<InstallManifest.InstallFileEntry>();
@@ -164,60 +172,142 @@ public class Game(string product, string branch = "us")
             if (checksOut)
                 tagFilteredEntries.Add(entry);
         }
-
-        await using var sw = new StreamWriter("install.txt");
-        foreach (var entry in tagFilteredEntries)
-        {
-            await sw.WriteLineAsync($"{entry.contentHash},{entry.name}");
-        }
         
-        /*
-        Parallel.ForEach(tagFilteredEntries, installEntry =>
+        //Parallel.ForEach(tagFilteredEntries, async void (installEntry) =>
+        foreach (var installEntry in tagFilteredEntries)
         {
-            if (!encoding.contentEntries.TryGetValue(installEntry.contentHash, out var entry)) return;
-            var key = entry.eKeys[0];
-            if (key == null) return;
-            foreach (var cdnURL in cdn.Hosts)
+            if (!encoding.contentEntries.TryGetValue(installEntry.contentHash, out var contentEntry)) return;
+            var key = contentEntry.eKeys[0];
+
+            var filePath = Path.Combine(shared_game_dir, installEntry.name);
+            
+            if (File.Exists(filePath) && !overrideFiles)
+                continue;
+
+            byte[]? data = null;
+            
+            if (archiveGroup.TryGetValue(key, out var indexEntry))
             {
-                var url = $@"http://{cdnURL}/{cdn.Path}/data/{key?.UrlString}";
-                var encryptedData = Utils.GetDataFromURL(url).Result;
-
-                if (encryptedData == null)
+                try
                 {
-                    AnsiConsole.MarkupLine($"[red]{installEntry.name}[/]");
-                    continue;
+                    data = await DownloadFileFromIndex(indexEntry, cdn, cdnConfig);
+
+                    // Install file is BLTE encoded
+                    if (data != null)
+                    {
+                        using var ms = new MemoryStream(data);
+                        await using var blte = new BLTE.BLTEStream(ms, default);
+                        using var fso = new MemoryStream();
+                        await blte.CopyToAsync(fso);
+                        data = fso.ToArray();
+                    }
                 }
-
-                byte[]? data;
-                if (ArmadilloCrypt.Instance == null)
-                    data = encryptedData;
-                else
-                    data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-
-                if (data == null) continue;
-
-                using var ms = new MemoryStream(data);
-                using var blte = new BLTE.BLTEStream(ms, default);
-                using var fso = new MemoryStream();
-                blte.CopyTo(fso);
-                data = fso.ToArray();
-
-                var dir = Path.GetDirectoryName(installEntry.name) ?? "";
-                var dirPath = Path.Combine(shared_game_dir, dir);
-                if (!Directory.Exists(dirPath))
-                    Directory.CreateDirectory(dirPath);
-
-                var filePath = Path.Combine(shared_game_dir, installEntry.name);
-
-                if (File.Exists(filePath))
-                    continue;
-
-                File.WriteAllBytesAsync(filePath, data);
+                catch (CASInstaller.BLTE.BLTEDecoderException be)
+                {
+                    AnsiConsole.WriteLine($"[red]BLTE Decoder Exception: {be.Message}[/]");
+                }
+                catch (Exception e)
+                {
+                    AnsiConsole.WriteException(e);
+                    throw;
+                }
             }
-        });
-        */
+            else
+            {
+                data = await DownloadFileDirectly(key, cdn);
+            }
+            
+            if (data == null) continue;
+            
+            var dirPath = Path.GetDirectoryName(filePath) ?? "";
+            if (!Directory.Exists(dirPath))
+                Directory.CreateDirectory(dirPath);
+
+            await File.WriteAllBytesAsync(filePath, data);
+        }
     }
 
+    private static async Task<byte[]?> DownloadFileFromIndex(ArchiveIndex.IndexEntry indexEntry, CDN? cdn, CDNConfig? cdnConfig)
+    {
+        var hosts = cdn?.Hosts;
+        if (hosts == null) return null;
+        var archive = cdnConfig?.Archives?[indexEntry.archiveIndex];
+        if (archive != null)
+        {
+            foreach (var cdnURL in hosts)
+            {
+                var url = $@"http://{cdnURL}/{cdn?.Path}/data/{archive.Value.UrlString}";
+                var dataFilePath = Path.Combine(cache_dir, archive.Value.KeyString);
+                if (File.Exists(dataFilePath))
+                {
+                    await using var str = File.OpenRead(dataFilePath);
+                    var data = new byte[indexEntry.size];
+                    str.Seek(indexEntry.offset, SeekOrigin.Begin);
+                    await str.ReadExactlyAsync(data, 0, (int)indexEntry.size);
+                    return data;
+                }
+                else
+                {
+                    var encryptedData = await Utils.GetDataFromURL(url);
+                    if (encryptedData == null)
+                        continue;
+
+                    byte[]? decryptedData;
+                    if (ArmadilloCrypt.Instance == null)
+                        decryptedData = encryptedData;
+                    else
+                        decryptedData = ArmadilloCrypt.Instance?.DecryptData(archive.Value, encryptedData);
+
+                    if (decryptedData == null) continue;
+
+                    // Cache
+                    await File.WriteAllBytesAsync(dataFilePath, decryptedData);
+                    
+                    using var str = new MemoryStream(decryptedData);
+                    var data = new byte[indexEntry.size];
+                    str.Seek(indexEntry.offset, SeekOrigin.Begin);
+                    await str.ReadExactlyAsync(data, 0, (int)indexEntry.size);
+                    return data;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    private static async Task<byte[]?> DownloadFileDirectly(Hash key, CDN? cdn)
+    {
+        var hosts = cdn?.Hosts;
+        if (hosts == null) return null;
+        
+        foreach (var cdnURL in hosts)
+        {
+            var url = $@"http://{cdnURL}/{cdn?.Path}/data/{key.UrlString}";
+            var encryptedData = await Utils.GetDataFromURL(url);
+
+            if (encryptedData == null)
+                continue;
+
+            byte[]? data;
+            if (ArmadilloCrypt.Instance == null)
+                data = encryptedData;
+            else
+                data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+
+            if (data == null) continue;
+
+            using var ms = new MemoryStream(data);
+            await using var blte = new BLTE.BLTEStream(ms, default);
+            using var fso = new MemoryStream();
+            await blte.CopyToAsync(fso);
+            data = fso.ToArray();
+
+            return data;
+        }
+        
+        return null;
+    }
+    
     private void ProcessDownload(DownloadManifest? download, List<string>? tags)
     {
         if (download == null)

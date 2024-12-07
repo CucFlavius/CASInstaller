@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using System.IO.MemoryMappedFiles;
 using System.Security.Cryptography;
 using Spectre.Console;
 
@@ -31,7 +32,7 @@ public struct ArchiveIndex
             var footerChecksum = br.ReadBytes(checksumSize);
         }
     }
-    
+
     private ArchiveIndex(byte[] data, ushort index, ConcurrentDictionary<Hash, IndexEntry>? archiveGroup)
     {
         if (data.Length == 0)
@@ -57,18 +58,19 @@ public struct ArchiveIndex
         while (recordsRead != footer.numElements)
         {
             var blockRecordsRead = 0;
-
+            
             for (var blockIndex = 0; blockIndex < recordsPerBlock && recordsRead < footer.numElements; blockIndex++, recordsRead++)
             {
-                var headerHash = new Hash(br.ReadBytes(footer.keySizeBytes));
+                var bytes = br.ReadBytes(footer.keySizeBytes);
+                var headerHash = new Hash(bytes);
                 var entry = new IndexEntry(br, footer.sizeBytes, footer.offsetBytes, index);
-                
+
                 archiveGroup.TryAdd(headerHash, entry);
 
                 blockRecordsRead++;
             }
 
-            br.ReadBytes(indexBlockSize - (blockRecordsRead * recordSize));
+            br.BaseStream.Position += indexBlockSize - (blockRecordsRead * recordSize);
         }
     }
     
@@ -124,7 +126,8 @@ public struct ArchiveIndex
         
         if (File.Exists(savePath))
         {
-            return new ArchiveIndex(await File.ReadAllBytesAsync(savePath), index, archiveGroup);
+            var data = await File.ReadAllBytesAsync(savePath);
+            return new ArchiveIndex(data, index, archiveGroup);
         }
         else
         {

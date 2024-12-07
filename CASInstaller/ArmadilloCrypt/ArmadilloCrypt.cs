@@ -110,8 +110,7 @@ public class ArmadilloCrypt
         using var ms = cs.CopyToMemoryStream();
         return ms.ToArray(); 
     }
-
-    [Obsolete]
+    
     public byte[] DecryptData(Hash? key, byte[]? encryptedData)
     {
         if (key == null)

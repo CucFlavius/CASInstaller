@@ -140,4 +140,13 @@ public class InstallManifest
         AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
         AnsiConsole.Markup(this.ToString());
     }
+
+    public void Dump(string path)
+    {
+        using var sw = new StreamWriter(path);
+        foreach (var entry in entries)
+        {
+            sw.WriteLine($"{entry.contentHash},{entry.name}");
+        }
+    }
 }

@@ -81,32 +81,15 @@ public static class Extensions
             writer.Write(value);
         }
     }
-    
-    public static Int64 ReadInt64(this BinaryReader reader, bool invertEndian = false)
+
+    public static ushort ReadUInt16(this BinaryReader reader, bool invertEndian = false)
     {
         if (invertEndian)
         {
-            return BitConverter.ToInt64(reader.ReadInvertedBytes(8), 0);
-        }
-
-        return reader.ReadInt64();
-    }
-
-    public static Single ReadSingle(this BinaryReader reader, bool invertEndian = false)
-    {
-        if (invertEndian)
-        {
-            return BitConverter.ToSingle(reader.ReadInvertedBytes(4), 0);
-        }
-
-        return reader.ReadSingle();
-    }
-
-    public static UInt16 ReadUInt16(this BinaryReader reader, bool invertEndian = false)
-    {
-        if (invertEndian)
-        {
-            return BitConverter.ToUInt16(reader.ReadInvertedBytes(2), 0);
+            Span<byte> buffer = stackalloc byte[2]; // Use stack allocation for 2 bytes
+            reader.Read(buffer);
+            buffer.Reverse(); // Reverse the bytes in-place
+            return BitConverter.ToUInt16(buffer);
         }
 
         return reader.ReadUInt16();
@@ -128,7 +111,10 @@ public static class Extensions
     {
         if (invertEndian)
         {
-            return BitConverter.ToUInt32(reader.ReadInvertedBytes(4), 0);
+            Span<byte> buffer = stackalloc byte[4]; // Use stack allocation for better performance
+            reader.Read(buffer);
+            buffer.Reverse(); // Reverse the bytes in-place
+            return BitConverter.ToUInt32(buffer);
         }
 
         return reader.ReadUInt32();
