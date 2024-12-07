@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using Spectre.Console;
 
 namespace CASInstaller;
 
@@ -49,7 +50,7 @@ public struct CDN
         return cdns.ToArray();
     }
     
-    public static async Task<CDN> GetCDN(string? product, string region = "us")
+    public static async Task<CDN> GetCDN(string? product, string? branch = "us")
     {
         var url = $@"http://us.patch.battle.net:1119/{product}/cdns";
         var data = await Utils.GetDataFromURL(url);
@@ -68,7 +69,7 @@ public struct CDN
             
             var cdn = new CDN(line, product);
 
-            if (cdn.Name == region)
+            if (cdn.Name == branch)
             {
                 return cdn;
             }
@@ -95,5 +96,13 @@ public struct CDN
         }
         sb.AppendLine($"[yellow]ConfigPath:[/] {ConfigPath}");
         return sb.ToString();
+    }
+
+    public void LogInfo()
+    {
+        AnsiConsole.MarkupLine("[bold blue]---------------[/]");
+        AnsiConsole.MarkupLine("[bold blue]----- CDN -----[/]");
+        AnsiConsole.MarkupLine("[bold blue]---------------[/]");
+        AnsiConsole.Markup(this.ToString());
     }
 }

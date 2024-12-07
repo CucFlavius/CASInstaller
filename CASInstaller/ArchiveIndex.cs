@@ -103,10 +103,10 @@ public struct ArchiveIndex
         }
     }
     
-    public static async Task<ArchiveIndex> GetDataIndex(CDN cdn, Hash key, string pathType, string data_dir,
+    public static async Task<ArchiveIndex> GetDataIndex(CDN? cdn, Hash? key, string pathType, string data_dir,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry> archiveGroup, ushort index = 0)
     {
-        if (key.KeyString == null)
+        if (cdn == null || key?.KeyString == null)
             return new ArchiveIndex([], index, archiveGroup);
         
         var saveDir = Path.Combine(data_dir, "indices");
@@ -118,9 +118,12 @@ public struct ArchiveIndex
         }
         else
         {
-            foreach (var cdnURL in cdn.Hosts)
+            var hosts = cdn?.Hosts;
+            if (hosts == null)
+                return new ArchiveIndex([], index, archiveGroup);
+            foreach (var cdnURL in hosts)
             {
-                var url = $@"http://{cdnURL}/{cdn.Path}/{pathType}/{key.KeyString[0..2]}/{key.KeyString[2..4]}/{key}.index";
+                var url = $@"http://{cdnURL}/{cdn?.Path}/{pathType}/{key?.UrlString}.index";
                 var data = await Utils.GetDataFromURL(url);
                 if (data == null) continue;
                 if (ArmadilloCrypt.Instance != null)

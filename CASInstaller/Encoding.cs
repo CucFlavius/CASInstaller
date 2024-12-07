@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using Spectre.Console;
 
 namespace CASInstaller;
 
@@ -181,14 +182,20 @@ public class Encoding
         encodingESpec = new string(br.ReadChars(int.Parse(eespecSize.ToString())));
     }
 
-    public static async Task<Encoding> GetEncoding(CDN cdn, string hash, int encodingSize = 0, bool parseTableB = false, bool checkStuff = false, bool encoded = true)
+    public static async Task<Encoding> GetEncoding(CDN? cdn, Hash? key, int encodingSize = 0, bool parseTableB = false, bool checkStuff = false, bool encoded = true)
     {
+        if (cdn == null || key == null)
+            throw new Exception("CDN or key is null.");
+        
         BinaryReader bin;
         if (encoded)
         {
-            foreach (var cdnURL in cdn.Hosts)
+            var hosts = cdn?.Hosts;
+            if (hosts == null)
+                throw new Exception("No hosts found for CDN.");
+            foreach (var cdnURL in hosts)
             {
-                var content = await Utils.GetDataFromURL($"http://{cdnURL}/{cdn.Path}/data/{hash[0..2]}/{hash[2..4]}/{hash}");
+                var content = await Utils.GetDataFromURL($"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}");
                 if (encodingSize != 0 && encodingSize != content?.Length || content == null)
                     continue;
 
@@ -201,7 +208,7 @@ public class Encoding
         }
         else
         {
-            var data = await File.ReadAllBytesAsync(cdn.Path);
+            var data = await File.ReadAllBytesAsync(cdn?.Path);
             return new Encoding(data, parseTableB, checkStuff);
         }
         
@@ -224,6 +231,22 @@ public class Encoding
         if (stringBlockEntries != null)
             sb.AppendLine($"[yellow]stringBlockEntries:[/] {stringBlockEntries.Length}");
         return sb.ToString();
-        
+    }
+
+    public void Dump(string path)
+    {
+        using var sw = new StreamWriter(path);
+        foreach (var entry in contentEntries)
+        {
+            sw.WriteLine($"{entry.Key},{entry.Value.eKeys[0].KeyString}");
+        }
+    }
+
+    public void LogInfo()
+    {
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.MarkupLine("[bold blue]----- Encoding ----[/]");
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.Markup(this.ToString());
     }
 }

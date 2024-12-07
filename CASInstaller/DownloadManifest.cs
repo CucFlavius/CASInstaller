@@ -129,11 +129,14 @@ public class DownloadManifest
         }
     }
     
-    public static async Task<DownloadManifest?> GetDownload(CDN cdn, string? key)
+    public static async Task<DownloadManifest?> GetDownload(CDN? cdn, Hash? key)
     {
-        foreach (var cdnURL in cdn.Hosts)
+        var hosts = cdn?.Hosts;
+        if (hosts == null)
+            throw new Exception("No hosts found for CDN.");
+        foreach (var cdnURL in hosts)
         {
-            var url = $@"http://{cdnURL}/{cdn.Path}/data/{key[0..2]}/{key[2..4]}/{key}";
+            var url = $@"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}";
             var encryptedData = await Utils.GetDataFromURL(url);
             if (encryptedData == null) continue;
 
@@ -173,5 +176,13 @@ public class DownloadManifest
         }
         sb.AppendLine();
         return sb.ToString();
+    }
+
+    public void LogInfo()
+    {
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.MarkupLine("[bold blue]----- Download -----[/]");
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.Markup(this.ToString());
     }
 }

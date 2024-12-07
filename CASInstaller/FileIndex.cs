@@ -103,9 +103,12 @@ public struct FileIndex
         return indexes;
     }
     
-    public static async Task<FileIndex> GetDataIndex(CDN cdn, Hash key, string pathType, string data_dir)
+    public static async Task<FileIndex> GetDataIndex(CDN? cdn, Hash? key, string pathType, string data_dir)
     {
-        if (key.KeyString == null)
+        if (cdn == null || key == null)
+            return new FileIndex([]);
+        
+        if (key?.KeyString == null)
             return new FileIndex([]);
         
         var saveDir = Path.Combine(data_dir, "indices");
@@ -117,9 +120,13 @@ public struct FileIndex
         }
         else
         {
-            foreach (var cdnURL in cdn.Hosts)
+            var hosts = cdn?.Hosts;
+            if (hosts == null)
+                return new FileIndex([]);
+            
+            foreach (var cdnURL in hosts)
             {
-                var url = $@"http://{cdnURL}/{cdn.Path}/{pathType}/{key.KeyString[0..2]}/{key.KeyString[2..4]}/{key}.index";
+                var url = $@"http://{cdnURL}/{cdn?.Path}/{pathType}/{key?.UrlString}.index";
                 var data = await Utils.GetDataFromURL(url);
                 if (data == null) continue;
                 if (ArmadilloCrypt.Instance != null)

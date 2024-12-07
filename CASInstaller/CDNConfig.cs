@@ -94,12 +94,12 @@ public struct CDNConfig
         }
     }
     
-    public static async Task<CDNConfig> GetConfig(CDN cdn, string? key, string data_dir)
+    public static async Task<CDNConfig> GetConfig(CDN? cdn, Hash? key, string? data_dir)
     {
-        if (key == null) return new CDNConfig(string.Empty);
+        if (cdn == null || key == null || data_dir == null) return new CDNConfig(string.Empty);
         
-        var saveDir = Path.Combine(data_dir, "config", key[0..2], key[2..4]);
-        var savePath = Path.Combine(saveDir, key);
+        var saveDir = Path.Combine(data_dir, "config", key?.KeyString?[0..2] ?? "", key?.KeyString?[2..4] ?? "");
+        var savePath = Path.Combine(saveDir, key?.KeyString ?? "");
         
         if (File.Exists(savePath))
         {
@@ -109,9 +109,12 @@ public struct CDNConfig
         }
         else
         {
-            foreach (var cdnURL in cdn.Hosts)
+            var hosts = cdn?.Hosts;
+            if (hosts == null) return new CDNConfig(string.Empty);
+            
+            foreach (var cdnURL in hosts)
             {
-                var url = $@"http://{cdnURL}/{cdn.Path}/config/{key[0..2]}/{key[2..4]}/{key}";
+                var url = $@"http://{cdnURL}/{cdn?.Path}/config/{key?.UrlString}";
                 var encryptedData = await Utils.GetDataFromURL(url);
                 if (encryptedData == null) continue;
                 byte[]? data;
@@ -147,5 +150,13 @@ public struct CDNConfig
         sb.AppendLine($"[yellow]PatchFileIndex:[/] {PatchFileIndex}");
         sb.AppendLine($"[yellow]PatchFileIndexSize:[/] {PatchFileIndexSize}");
         return sb.ToString();
+    }
+
+    public void LogInfo()
+    {
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.MarkupLine("[bold blue]--- CDN Config ----[/]");
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.Markup(this.ToString());
     }
 }

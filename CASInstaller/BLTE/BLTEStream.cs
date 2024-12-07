@@ -49,7 +49,6 @@ public class BLTEStream : Stream
         }
     }
     
-    public static bool ValidateData { get; set; } = true;
     public static bool ThrowOnMissingDecryptionKey { get; set; } = true;
 
     public BLTEStream(Stream src, in Hash eKey)
@@ -74,21 +73,6 @@ public class BLTEStream : Stream
 
         int headerSize = _reader.ReadInt32BE();
         _hasHeader = headerSize > 0;
-
-        if (ValidateData)
-        {
-            var oldPos = _reader.BaseStream.Position;
-
-            _reader.BaseStream.Position = 0;
-
-            var newHash = _md5.ComputeHash(_reader.ReadBytes(_hasHeader ? headerSize : size));
-            var newKey = new Hash(newHash);
-            
-            if (!eKey.EqualsPartial(newKey))
-                throw new BLTEDecoderException(0, $"Failed to parse encoding header: hash verification failed using e-key {eKey.KeyString}");
-
-            _reader.BaseStream.Position = oldPos;
-        }
 
         int numBlocks = 1;
 
@@ -143,11 +127,6 @@ public class BLTEStream : Stream
         ProcessNextBlock();
 
         _length = _hasHeader ? _memStream.Capacity : _memStream.Length;
-
-        //for (int i = 0; i < _dataBlocks.Length; i++)
-        //{
-        //    ProcessNextBlock();
-        //}
     }
 
     private bool ProcessNextBlock()
@@ -164,16 +143,6 @@ public class BLTEStream : Stream
 
         using (NestedStream ns = new NestedStream(_stream, block.CompSize, true))
         {
-            if (_hasHeader && ValidateData)
-            {
-                byte[] blockHash = _md5.ComputeHash(ns);
-
-                if (!block.Hash.EqualsTo(blockHash))
-                    throw new BLTEDecoderException(0, "MD5 mismatch");
-
-                ns.Position = 0;
-            }
-
             HandleDataBlock(ns, _blocksIndex);
         }
 

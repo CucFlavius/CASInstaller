@@ -1,12 +1,14 @@
 ﻿using System.Text;
+using Spectre.Console;
+
 namespace CASInstaller;
 
 public struct BuildConfig
 {
     public string Root;
-    public string?[] Download;
-    public string?[] Install;
-    public string[] Encoding;
+    public Hash[] Download;
+    public Hash[] Install;
+    public Hash[] Encoding;
     public string[] EncodingSize;
     public string[] Size;
     public string[] SizeSize;
@@ -57,13 +59,28 @@ public struct BuildConfig
                     Root = cols[1];
                     break;
                 case "download":
-                    Download = cols[1].Split(' ');
+                    var downloadEntries = cols[1].Split(' ');
+                    Download = new Hash[downloadEntries.Length];
+                    for (var i = 0; i < downloadEntries.Length; i++)
+                    {
+                        Download[i] = new Hash(downloadEntries[i]);
+                    }
                     break;
                 case "install":
-                    Install = cols[1].Split(' ');
+                    var installEntries = cols[1].Split(' ');
+                    Install = new Hash[installEntries.Length];
+                    for (var i = 0; i < installEntries.Length; i++)
+                    {
+                        Install[i] = new Hash(installEntries[i]);
+                    }
                     break;
                 case "encoding":
-                    Encoding = cols[1].Split(' ');
+                    var encodingEntries = cols[1].Split(' ');
+                    Encoding = new Hash[encodingEntries.Length];
+                    for (var i = 0; i < encodingEntries.Length; i++)
+                    {
+                        Encoding[i] = new Hash(encodingEntries[i]);
+                    }
                     break;
                 case "encoding-size":
                     EncodingSize = cols[1].Split(' ');
@@ -150,12 +167,12 @@ public struct BuildConfig
         }
     }
     
-    public static async Task<BuildConfig> GetBuildConfig(CDN cdn, string? key, string data_dir)
+    public static async Task<BuildConfig> GetBuildConfig(CDN? cdn, Hash? key, string? data_dir)
     {
-        if (key == null) return new BuildConfig();
+        if (cdn == null || key == null || data_dir == null) return new BuildConfig();
         
-        var saveDir = Path.Combine(data_dir, "config", key[0..2], key[2..4]);
-        var savePath = Path.Combine(saveDir, key);
+        var saveDir = Path.Combine(data_dir, "config", key?.KeyString?[0..2] ?? "", key?.KeyString?[2..4] ?? "");
+        var savePath = Path.Combine(saveDir, key?.KeyString ?? "");
         
         if (File.Exists(savePath))
         {
@@ -163,9 +180,12 @@ public struct BuildConfig
         }
         else
         {
-            foreach (var cdnURL in cdn.Hosts)
+            var hosts = cdn?.Hosts;
+            if (hosts == null) return new BuildConfig();
+            
+            foreach (var cdnURL in hosts)
             {
-                var url = $@"http://{cdnURL}/{cdn.Path}/config/{key[0..2]}/{key[2..4]}/{key}";
+                var url = $@"http://{cdnURL}/{cdn?.Path}/config/{key?.UrlString}";
                 var encryptedData = await Utils.GetDataFromURL(url);
                 if (encryptedData == null) continue;
                 byte[] data;
@@ -220,5 +240,13 @@ public struct BuildConfig
         sb.AppendLine($"[yellow]PatchIndex:[/] {string.Join(" ", PatchIndex)}");
         sb.AppendLine($"[yellow]PatchIndexSize:[/] {string.Join(" ", PatchIndexSize)}");
         return sb.ToString();
+    }
+
+    public void LogInfo()
+    {
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.MarkupLine("[bold blue]--- Build Config --[/]");
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.Markup(this.ToString());
     }
 }

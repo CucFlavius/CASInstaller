@@ -4,6 +4,7 @@ public readonly struct Hash : IEquatable<Hash>, IComparable<Hash>
 {
     public byte[] Key { get; }
     public string? KeyString => Key != null ? Convert.ToHexStringLower(Key) : null;
+    public string UrlString => $"{KeyString?[..2]}/{KeyString?[2..4]}/{KeyString}";
     
     public Hash(byte[] key, bool key9 = false)
     {

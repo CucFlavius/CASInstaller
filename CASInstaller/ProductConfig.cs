@@ -21,11 +21,16 @@ public class ProductConfig
     public Zhcn zhcn { get; set; }
     public Zhtw zhtw { get; set; }
 
-    public static async Task<ProductConfig?> GetProductConfig(CDN cdn, string? key)
+    public static async Task<ProductConfig?> GetProductConfig(CDN? cdn, Hash? key)
     {
-        foreach (var cdnURL in cdn.Hosts)
+        if (cdn?.Hosts == null || key == null) return null;
+
+        var hosts = cdn?.Hosts;
+        if (hosts == null) return null;
+        
+        foreach (var cdnURL in hosts)
         {
-            var url = $@"http://{cdnURL}/{cdn.ConfigPath}/{key[0..2]}/{key[2..4]}/{key}";
+            var url = $@"http://{cdnURL}/{cdn?.ConfigPath}/{key?.UrlString}";
             var encryptedData = await Utils.GetDataFromURL(url);
             if (encryptedData == null) continue;
             byte[]? data;
@@ -33,9 +38,9 @@ public class ProductConfig
                 data = encryptedData;
             else
                 data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-            
+
             if (data == null) continue;
-            
+
             var options = new JsonReaderOptions
             {
                 AllowTrailingCommas = true,

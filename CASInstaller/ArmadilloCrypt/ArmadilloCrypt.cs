@@ -112,9 +112,15 @@ public class ArmadilloCrypt
     }
 
     [Obsolete]
-    public byte[] DecryptData(Hash key, byte[] encryptedData)
+    public byte[] DecryptData(Hash? key, byte[]? encryptedData)
     {
-        var iv = key.Key[8..];
+        if (key == null)
+            throw new ArgumentNullException(nameof(key));
+        
+        if (encryptedData == null)
+            throw new ArgumentNullException(nameof(encryptedData));
+        
+        var iv = key?.Key[8..];
 
         using var stream = new MemoryStream(encryptedData);
         using var decryptor = KeyService.SalsaInstance.CreateDecryptor(_key, iv);

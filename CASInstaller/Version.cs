@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using Spectre.Console;
 
 namespace CASInstaller;
 
@@ -55,7 +56,7 @@ public struct Version
         return versions.ToArray();
     }
     
-    public static async Task<Version> GetVersion(string? product, string region = "us")
+    public static async Task<Version> GetVersion(string? product, string? branch = "us")
     {
         var url = $@"http://us.patch.battle.net:1119/{product}/versions";
         var data = await Utils.GetDataFromURL(url);
@@ -79,7 +80,7 @@ public struct Version
             
             var version = new Version(line, product);
 
-            if (version.Region == region)
+            if (version.Region == branch)
             {
                 return version;
             }
@@ -100,5 +101,13 @@ public struct Version
         sb.AppendLine($"[yellow]VersionsName:[/] {VersionsName}");
         sb.AppendLine($"[yellow]ProductConfig:[/] {ProductConfigHash}");
         return sb.ToString();
+    }
+
+    public void LogInfo()
+    {
+        AnsiConsole.MarkupLine("[bold blue]---------------[/]");
+        AnsiConsole.MarkupLine("[bold blue]--- Version ---[/]");
+        AnsiConsole.MarkupLine("[bold blue]---------------[/]");
+        AnsiConsole.Markup(this.ToString());
     }
 }

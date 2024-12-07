@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using Spectre.Console;
 
 namespace CASInstaller;
 
@@ -79,11 +80,13 @@ public class InstallManifest
         }
     }
     
-    public static async Task<InstallManifest?> GetInstall(CDN cdn, string? key)
+    public static async Task<InstallManifest?> GetInstall(CDN? cdn, Hash? key)
     {
-        foreach (var cdnURL in cdn.Hosts)
+        var hosts = cdn?.Hosts;
+        if (hosts == null) return null;
+        foreach (var cdnURL in hosts)
         {
-            var url = $@"http://{cdnURL}/{cdn.Path}/data/{key[0..2]}/{key[2..4]}/{key}";
+            var url = $@"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}";
             var encryptedData = await Utils.GetDataFromURL(url);
             if (encryptedData == null) continue;
 
@@ -128,5 +131,13 @@ public class InstallManifest
         }
         */
         return sb.ToString();
+    }
+
+    public void LogInfo()
+    {
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.MarkupLine("[bold blue]----- Install -----[/]");
+        AnsiConsole.MarkupLine("[bold blue]-------------------[/]");
+        AnsiConsole.Markup(this.ToString());
     }
 }
