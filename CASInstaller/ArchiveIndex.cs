@@ -37,6 +37,9 @@ public struct ArchiveIndex
         if (data.Length == 0)
             return;
         
+        if (archiveGroup == null)
+            return;
+        
         using var stream = new MemoryStream(data);
         using var br = new BinaryReader(stream);
         
@@ -90,8 +93,13 @@ public struct ArchiveIndex
                     // Archive index
                     offset = br.ReadUInt32(true);
                     break;
+                case 5:
+                    // Patch group index
+                    archiveIndex = br.ReadByte();
+                    offset = br.ReadUInt32(true);
+                    break;
                 case 6:
-                    // Group index
+                    // Archive group index
                     archiveIndex = br.ReadUInt16(true);
                     offset = br.ReadUInt32(true);
                     break;
@@ -163,9 +171,12 @@ public struct ArchiveIndex
         return new ArchiveIndex([], index, archiveGroup);
     }
     
-    public static void GenerateIndexGroupFile(ConcurrentDictionary<Hash, IndexEntry>? archiveGroup, string archiveGroupPath)
+    public static void GenerateIndexGroupFile(ConcurrentDictionary<Hash, IndexEntry>? archiveGroup, string archiveGroupPath, byte offsetBytes)
     {
         AnsiConsole.WriteLine("Generating archive group index...");
+        
+        if (archiveGroup == null)
+            return;
         
         var archiveKeys = new List<Hash>(archiveGroup.Keys);
         archiveKeys.Sort();
@@ -196,7 +207,15 @@ public struct ArchiveIndex
             // Write entry to block buffer
             blockWriter.Write(hash.Key);
             blockWriter.Write(entry.size, true);
-            blockWriter.Write(entry.archiveIndex, true);
+            switch (offsetBytes)
+            {
+                case 5:
+                    blockWriter.Write((byte)entry.archiveIndex);
+                    break;
+                case 6:
+                    blockWriter.Write(entry.archiveIndex, true);
+                    break;
+            }
             blockWriter.Write(entry.offset, true);
             
             previousHash = hash;
@@ -258,7 +277,7 @@ public struct ArchiveIndex
         footerBW.Write((byte)4);
         
         // Write offset bytes
-        footerBW.Write((byte)6);
+        footerBW.Write(offsetBytes);
         
         // Write size bytes
         footerBW.Write((byte)4);

@@ -51,8 +51,8 @@ public class Game(string product, string branch = "us")
         _patchFileIndex = FileIndex.GetDataIndex(_cdn, _cdnConfig?.PatchFileIndex, "patch", _data_dir).Result;
         _patchFileIndex?.Dump("patchfileindex.txt");
         
-        _archiveGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.Archives, _cdnConfig?.ArchiveGroup, _data_dir, "data");
-        _patchGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.PatchArchives, _cdnConfig?.PatchArchiveGroup, _data_dir, "patch", true);
+        _archiveGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.Archives, _cdnConfig?.ArchiveGroup, _data_dir, "data", 6);
+        _patchGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.PatchArchives, _cdnConfig?.PatchArchiveGroup, _data_dir, "patch", 5);
         
         var encodingContentHash = _buildConfig?.Encoding[0];
         var encodingEncodedHash = _buildConfig?.Encoding[1];
@@ -96,7 +96,7 @@ public class Game(string product, string branch = "us")
     }
 
     private static async Task<ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>?> ProcessIndices(
-        CDN? cdn, CDNConfig? cdnConfig, Hash[]? indices,  Hash? groupKey, string? data_dir, string pathType, bool overrideGroup = false)
+        CDN? cdn, CDNConfig? cdnConfig, Hash[]? indices,  Hash? groupKey, string? data_dir, string pathType, byte offsetBytes, bool overrideGroup = false)
     {
         if (cdn == null || cdnConfig == null || data_dir == null || groupKey == null)
             return null;
@@ -130,7 +130,7 @@ public class Game(string product, string branch = "us")
             });
             
             // Save the archive group index
-            ArchiveIndex.GenerateIndexGroupFile(indexGroup, groupPath);
+            ArchiveIndex.GenerateIndexGroupFile(indexGroup, groupPath, offsetBytes);
         }
 
         return indexGroup;
