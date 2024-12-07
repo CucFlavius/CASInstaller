@@ -1,5 +1,9 @@
 ﻿using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text.Json;
+using Google.Protobuf;
+using Google.Protobuf.Collections;
+using ProtoDatabase;
 using Spectre.Console;
 
 namespace CASInstaller;
@@ -14,6 +18,7 @@ public class Game(string product, string branch = "us")
     private CDN? _cdn;
     private Version? _version;
     private ProductConfig? _productConfig;
+    private string? _game_dir;
     private string? _shared_game_dir;
     private string? _data_dir;
     private List<string>? _installTags;
@@ -33,7 +38,7 @@ public class Game(string product, string branch = "us")
             Directory.CreateDirectory(cache_dir);
         
         _installPath = installPath;
-        
+
         BLTE.BLTEStream.ThrowOnMissingDecryptionKey = false;
         KeyService.LoadKeys();
         
@@ -79,8 +84,12 @@ public class Game(string product, string branch = "us")
         _install?.Dump("install.txt");
         _install?.LogInfo();
         await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
+
+        WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
+        WritePatchResult(_game_dir);
+        WriteLauncherDB(_game_dir);
     }
-    
+
     private void ProcessProductConfig(ProductConfig? productConfig, string installPath)
     {
         if (productConfig == null)
@@ -92,18 +101,19 @@ public class Game(string product, string branch = "us")
         _installTags.AddRange(tags);
         _installTags.AddRange(tags_64bit);
         
-        var game_dir = Path.Combine(installPath, productConfig.all.config.form.game_dir.dirname);
-        _shared_game_dir = Path.Combine(game_dir, productConfig.all.config.shared_container_default_subfolder);
+        _game_dir = Path.Combine(installPath, productConfig.all.config.form.game_dir.dirname);
+        _shared_game_dir = Path.Combine(_game_dir, productConfig.all.config.shared_container_default_subfolder);
         if (!Directory.Exists(_shared_game_dir))
             Directory.CreateDirectory(_shared_game_dir);
         
-        _data_dir = Path.Combine(game_dir, productConfig.all.config.data_dir);
+        _data_dir = Path.Combine(_game_dir, productConfig.all.config.data_dir);
         if (!Directory.Exists(_data_dir))
             Directory.CreateDirectory(_data_dir);
     }
 
     private static async Task<ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>?> ProcessIndices(
-        CDN? cdn, CDNConfig? cdnConfig, Hash[]? indices,  Hash? groupKey, string? data_dir, string pathType, byte offsetBytes, bool overrideGroup = false)
+        CDN? cdn, CDNConfig? cdnConfig, Hash[]? indices, Hash? groupKey, string? data_dir,
+        string pathType, byte offsetBytes, bool overrideGroup = false)
     {
         if (cdn == null || cdnConfig == null || data_dir == null || groupKey == null)
             return null;
@@ -143,7 +153,10 @@ public class Game(string product, string branch = "us")
         return indexGroup;
     }
     
-    private static async Task ProcessInstall(InstallManifest? install, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags, string? shared_game_dir, bool overrideFiles = false)
+    private static async Task ProcessInstall(
+        InstallManifest? install, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
+        ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags,
+        string? shared_game_dir, bool overrideFiles = false)
     {
         if (install == null || cdn == null || encoding == null || archiveGroup == null || shared_game_dir == null)
             return;
@@ -394,5 +407,129 @@ public class Game(string product, string branch = "us")
     {
         var i = cascGetBucketIndex(key);
         return (i + 1) % 16;
+    }
+    
+    private void WriteProductDB(string? gameDir, Version? version, ProductConfig? productConfig, BuildConfig? buildConfig)
+    {
+        var prod = new ProductInstall
+        {
+            Uid = _product,
+            ProductCode = _product,
+            Settings = new UserSettings()
+            {
+                InstallPath = gameDir,
+                PlayRegion = "us",
+                DesktopShortcut = 0,
+                StartmenuShortcut = 0,
+                LanguageSettings = ProtoDatabase.LanguageSettingType.LangsettingAdvanced,
+                SelectedTextLanguage = "enUS",
+                SelectedSpeechLanguage = "enUS",
+                AdditionalTags = "",
+                VersionBranch = "",
+                AccountCountry = "",    // TODO: Find US country code
+                GeoIpCountry = "",      // TODO: Find US country code
+                GameSubfolder = productConfig?.all.config.shared_container_default_subfolder ?? "",
+            },
+            CachedProductState = new CachedProductState()
+            {
+                BaseProductState = new BaseProductState()
+                {
+                    Installed = true,
+                    Playable = true,
+                    UpdateComplete = true,
+                    BackgroundDownloadAvailable = false,
+                    BackgroundDownloadComplete = false,
+                    CurrentVersion = "",
+                    CurrentVersionStr = version?.VersionsName ?? "",
+                    DecryptionKey = "",     // TODO: Needs armadillo key name?
+                    ActiveBuildKey = version?.BuildConfigHash.KeyString?.ToLower() ?? "",
+                    ActiveBgdlKey = "",
+                    ActiveInstallKey = "",
+                    // TODO: v
+                    ActiveTagString = @"Windows x86_64 US? acct-ROU? geoip-RO? enUS speech?:Windows x86_64 US? acct-ROU? geoip-RO? enUS text?",
+                    IncompleteBuildKey = ""
+                },
+                BackfillProgress = new BackfillProgress()
+                {
+                    Progress = 0,
+                    Backgrounddownload = false,
+                    Paused = false,
+                    DownloadLimit = 0,
+                    Remaining = 0,
+                    Details = null
+                },
+                RepairProgress = new RepairProgress()
+                {
+                    Progress = 0,
+                },
+                UpdateProgress = new UpdateProgress()
+                {
+                    LastDiscSetUsed = "",
+                    Progress = 1,
+                    DiscIgnored = false,
+                    TotalToDownload = 4428913417,   // TODO: ???
+                    DownloadRemaining = 0,
+                    Details = new BuildProgressDetails()
+                    {
+                        TargetKey = version?.BuildConfigHash.KeyString?.ToLower() ?? "",
+                        WrittenOffset =
+                        {
+                            31965942,       // TODO: ???
+                            0,
+                            0
+                        },
+                        DownloadBaseline =
+                        {
+                            376442172,      // TODO: ???
+                            2881546372,     // TODO: ???
+                            1170768299      // TODO: ???
+                        }
+                    }
+                },
+            },
+            ProductOperations = null,
+            ProductFamily = buildConfig?.BuildProduct.ToLower() ?? "wow",
+            Hidden = false,
+            PersistentJsonStorage = @"{\u0022user_install_package_settings\u0022:[]}"
+        };
+        
+        if (gameDir == null)
+            return;
+
+        var data = prod.ToByteArray();
+        var path = Path.Combine(gameDir, ".product.db");
+        if (File.Exists(path))
+            File.SetAttributes(path, FileAttributes.None);
+            
+        File.WriteAllBytes(path, data);
+        File.SetAttributes(path, FileAttributes.Hidden);
+    }
+    
+    private void WritePatchResult(string? gameDir)
+    {
+        if (gameDir == null)
+            return;
+
+        var path = Path.Combine(gameDir, ".patch.result");
+        if (File.Exists(path))
+            File.SetAttributes(path, FileAttributes.None);
+
+        var data = "0"u8.ToArray();
+        File.WriteAllBytes(path, data);
+        File.SetAttributes(path, FileAttributes.Hidden);
+    }
+    
+    private void WriteLauncherDB(string? gameDir)
+    {
+        if (gameDir == null)
+            return;
+        
+        var path = Path.Combine(gameDir, "Launcher.db");
+        if (File.Exists(path))
+            File.SetAttributes(path, FileAttributes.None);
+        
+        var data = "enUS"u8.ToArray();
+        File.WriteAllBytes(path, data);
+        File.SetAttributes(path, FileAttributes.Hidden);
     }
 }

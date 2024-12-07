@@ -8,7 +8,13 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <PackageReference Include="Google.Protobuf" Version="3.29.1" />
+      <PackageReference Include="Grpc.Tools" Version="2.68.1">
+        <PrivateAssets>all</PrivateAssets>
+        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      </PackageReference>
       <PackageReference Include="Spectre.Console" Version="0.49.1" />
+	  <Protobuf Include="Proto\proto_database.proto" GrpcServices="Server" />
     </ItemGroup>
 
 </Project>
