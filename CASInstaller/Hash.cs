@@ -1,15 +1,22 @@
 ﻿namespace CASInstaller;
 
-public readonly struct Hash : IEquatable<Hash>
+public readonly struct Hash : IEquatable<Hash>, IComparable<Hash>
 {
     public byte[] Key { get; }
     public string? KeyString => Key != null ? Convert.ToHexStringLower(Key) : null;
     
-    public Hash(byte[] key)
+    public Hash(byte[] key, bool key9 = false)
     {
         if (key.Length != 16)
             throw new ArgumentException("Hash key must be 16 bytes long.");
-        Key = key;
+        
+        if (key9)
+        {
+            Key = new byte[16];
+            Array.Copy(key, Key, 9);
+        }
+        else
+            Key = key;
     }
 
     public Hash(BinaryReader br)
@@ -47,6 +54,11 @@ public readonly struct Hash : IEquatable<Hash>
     public override string? ToString()
     {
         return KeyString;
+    }
+
+    public int CompareTo(Hash other)
+    {
+        return new ReadOnlySpan<byte>(Key).SequenceCompareTo(other.Key);
     }
 
     public override bool Equals(object? obj)

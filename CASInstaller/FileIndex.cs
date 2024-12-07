@@ -1,10 +1,11 @@
-﻿using System.Collections.Concurrent;
-using Spectre.Console;
+﻿using Spectre.Console;
 
 namespace CASInstaller;
 
-public struct ArchiveIndex
+public struct FileIndex
 {
+    public readonly Dictionary<Hash, IndexEntry> Entries = new();
+
     public byte[] toc_hash;
     public byte version;
     public byte _11;
@@ -17,7 +18,7 @@ public struct ArchiveIndex
     public int numElements;
     public byte[] footerChecksum;
 
-    private ArchiveIndex(byte[] data, ushort index, ConcurrentDictionary<Hash, IndexEntry> archiveGroup)
+    private FileIndex(byte[] data)
     {
         if (data.Length == 0)
             return;
@@ -53,9 +54,9 @@ public struct ArchiveIndex
             for (var blockIndex = 0; blockIndex < recordsPerBlock && recordsRead < numElements; blockIndex++, recordsRead++)
             {
                 var headerHash = new Hash(br.ReadBytes(keySizeBytes));
-                var entry = new IndexEntry(br, sizeBytes, offsetBytes, index);
+                var entry = new IndexEntry(br, sizeBytes);
                 
-                archiveGroup.TryAdd(headerHash, entry);
+                Entries.Add(headerHash, entry);
 
                 blockRecordsRead++;
             }
@@ -67,12 +68,9 @@ public struct ArchiveIndex
     public struct IndexEntry
     {
         public uint size;
-        public uint offset;
-        public ushort archiveIndex;
         
-        public IndexEntry(BinaryReader br, byte sizeBytes, byte offsetBytes, ushort index)
+        public IndexEntry(BinaryReader br, byte sizeBytes)
         {
-            this.archiveIndex = index;
             if (sizeBytes == 4)
             {
                 size = br.ReadUInt32(true);
@@ -81,40 +79,41 @@ public struct ArchiveIndex
             {
                 throw new NotImplementedException("Index size reading other than 4 is not implemented!");
             }
-
-            if (offsetBytes == 4)
-            {
-                // Archive index
-                offset = br.ReadUInt32(true);
-            }
-            else if (offsetBytes == 6)
-            {
-                // Group index
-                throw new NotImplementedException("Group index reading is not implemented!");
-            }
-            else if (offsetBytes == 0)
-            {
-                // File index
-            }
-            else
-            {
-                throw new NotImplementedException("Offset size reading other than 4/6/0 is not implemented!");
-            }
         }
     }
     
-    public static async Task<ArchiveIndex> GetDataIndex(CDN cdn, Hash key, string pathType, string data_dir,
-        ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry> archiveGroup, ushort index = 0)
+    public static async Task<FileIndex[]> GetDataIndexes(Hash[] keys, CDN cdn, string pathType, string data_dir)
+    {
+        var indexes = new FileIndex[keys.Length];
+        var tasks = new Task<FileIndex>[keys.Length];
+        
+        for (var i = 0; i < keys.Length; i++)
+        {
+            var key = keys[i];
+            tasks[i] = GetDataIndex(cdn, key, pathType, data_dir);
+        }
+
+        await Task.WhenAll(tasks);
+
+        for (var i = 0; i < keys.Length; i++)
+        {
+            indexes[i] = tasks[i].Result;
+        }
+
+        return indexes;
+    }
+    
+    public static async Task<FileIndex> GetDataIndex(CDN cdn, Hash key, string pathType, string data_dir)
     {
         if (key.KeyString == null)
-            return new ArchiveIndex([], index, archiveGroup);
+            return new FileIndex([]);
         
         var saveDir = Path.Combine(data_dir, "indices");
         var savePath = Path.Combine(saveDir, key + ".index");
         
         if (File.Exists(savePath))
         {
-            return new ArchiveIndex(await File.ReadAllBytesAsync(savePath), index, archiveGroup);
+            return new FileIndex(await File.ReadAllBytesAsync(savePath));
         }
         else
         {
@@ -151,10 +150,10 @@ public struct ArchiveIndex
                     Directory.CreateDirectory(saveDir);
                 await File.WriteAllBytesAsync(savePath, data);
 
-                return new ArchiveIndex(data, index, archiveGroup);
+                return new FileIndex(data);
             }
         }
 
-        return new ArchiveIndex([], index, archiveGroup);
+        return new FileIndex([]);
     }
 }

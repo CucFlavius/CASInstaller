@@ -48,6 +48,18 @@ public static class Extensions
         return reader.ReadInt16();
     }
 
+    public static void Write(this BinaryWriter writer, Int16 value, bool invertEndian = false)
+    {
+        if (invertEndian)
+        {
+            writer.Write(BitConverter.GetBytes(value).Reverse().ToArray());
+        }
+        else
+        {
+            writer.Write(value);
+        }
+    }
+    
     public static Int32 ReadInt32(this BinaryReader reader, bool invertEndian = false)
     {
         if (invertEndian)
@@ -58,6 +70,18 @@ public static class Extensions
         return reader.ReadInt32();
     }
 
+    public static void Write(this BinaryWriter writer, Int32 value, bool invertEndian = false)
+    {
+        if (invertEndian)
+        {
+            writer.Write(BitConverter.GetBytes(value).Reverse().ToArray());
+        }
+        else
+        {
+            writer.Write(value);
+        }
+    }
+    
     public static Int64 ReadInt64(this BinaryReader reader, bool invertEndian = false)
     {
         if (invertEndian)
@@ -88,6 +112,18 @@ public static class Extensions
         return reader.ReadUInt16();
     }
 
+    public static void Write(this BinaryWriter writer, UInt16 value, bool invertEndian = false)
+    {
+        if (invertEndian)
+        {
+            writer.Write(BitConverter.GetBytes(value).Reverse().ToArray());
+        }
+        else
+        {
+            writer.Write(value);
+        }
+    }
+    
     public static UInt32 ReadUInt32(this BinaryReader reader, bool invertEndian = false)
     {
         if (invertEndian)
@@ -96,6 +132,18 @@ public static class Extensions
         }
 
         return reader.ReadUInt32();
+    }
+    
+    public static void Write(this BinaryWriter writer, UInt32 value, bool invertEndian = false)
+    {
+        if (invertEndian)
+        {
+            writer.Write(BitConverter.GetBytes(value).Reverse().ToArray());
+        }
+        else
+        {
+            writer.Write(value);
+        }
     }
 
     public static UInt64 ReadUInt64(this BinaryReader reader, bool invertEndian = false)

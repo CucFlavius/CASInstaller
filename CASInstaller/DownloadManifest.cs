@@ -6,70 +6,100 @@ namespace CASInstaller;
 
 public class DownloadManifest
 {
-    public byte version;
-    public byte checksumSize;
-    public bool hasChecksumInEntry;
-    public uint entryCount;
-    public ushort tagCount;
-    public byte flagSize;
-    public List<DownloadEntry> entries;
-    public List<DownloadTag> tags;
+    public int m_size;
+    public byte m_version;
+    public byte m_eKeySize;
+    public bool m_checkSumTypeConstant;
+    public uint m_numEntries;
+    public ushort m_numTags;
+    public byte m_numFlagsSize;
+    public byte m_priorityBias;
+    
+    public DownloadEntry[] entries;
+    public TagInfo[] tags;
     
     public DownloadManifest(byte[] data)
     {
+        m_size = data.Length;
+        
+        if (m_size <= 10)
+            throw new Exception($"Detected truncated download manifest. Only got {m_size} bytes, but minimum header size is 10 bytes.");
+        
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
         
-        var marker = br.ReadBytes(2);
-        var fileSignature = System.Text.Encoding.UTF8.GetString(marker);
-        if (fileSignature != "DL")
-            throw new Exception("Error while parsing install file. Did BLTE header size change?");
+        var magicBytes = br.ReadBytes(2);
+        var magicString = System.Text.Encoding.UTF8.GetString(magicBytes);
+        if (magicString != "DL")
+            throw new Exception("Invalid magic string in download manifest.");
 
-        version = br.ReadByte();
-        checksumSize = br.ReadByte();
-        hasChecksumInEntry = br.ReadByte() != 0;
-        entryCount = br.ReadUInt32(true);
-        tagCount = br.ReadUInt16(true);
-        if (version >= 2)
+        m_version = br.ReadByte();
+        
+        if (m_version > 2)
+            throw new Exception($"Unsupported install manifest version: {m_version}. This client only supports non-zero versions <= 2");
+        
+        m_eKeySize = br.ReadByte();
+        m_checkSumTypeConstant = br.ReadByte() != 0;
+        m_numEntries = br.ReadUInt32(true);
+        m_numTags = br.ReadUInt16(true);
+        if (m_version >= 2)
         {
-            flagSize = br.ReadByte();
-            if (version >= 3)
+            m_numFlagsSize = br.ReadByte();
+            if (m_version > 4)
             {
-                byte base_priority = br.ReadByte();
+                throw new Exception($"Unsupported number of flag bytes in download manifest: {m_numFlagsSize}");
+            }
+
+            if (m_version == 3)
+            {
+                m_priorityBias = br.ReadByte();
                 byte[] unknown = br.ReadBytes(3);
             }
         }
 
-        entries = new List<DownloadEntry>();
+        entries = new DownloadEntry[m_numEntries];
         
-        for (var i = 0; i < entryCount; i++)
+        for (var i = 0; i < m_numEntries; i++)
         {
-            var entry = new DownloadEntry(br, checksumSize, hasChecksumInEntry, flagSize);
-            entries.Add(entry);
+            entries[i] = new DownloadEntry(br, m_eKeySize, m_checkSumTypeConstant, m_numFlagsSize);
         }
+
+        tags = new TagInfo[m_numTags];
+        var bytesPerTag = ((int)m_numEntries + 7) / 8;
         
-        tags = new List<DownloadTag>();
-        var bytesPerTag = ((int)entryCount + 7) / 8;
-        
-        for (var i = 0; i < tagCount; i++)
+        for (var i = 0; i < m_numTags; i++)
         {
-            tags.Add(new DownloadTag(br, bytesPerTag));
+            tags[i] = new TagInfo(br, bytesPerTag);
+        }
+
+        for (var i = 0; i < m_numEntries; i++)
+        {
+            entries[i].tagIndices = 0; // Initialize to 0
+
+            for (var j = 0; j < m_numTags; j++)
+            {
+                if (tags[j].bitmap[i])
+                {
+                    entries[i].tagIndices |= (1 << j); // Set the bit at position j
+                }
+            }
         }
     }
     
-    public struct DownloadEntry
+    public class DownloadEntry
     {
         public Hash eKey;
         public ulong size;
-        public byte priority;
+        public sbyte priority;
         public uint checksum;
         public byte flags;
-
+        public int tagIndices;
+        
         public DownloadEntry(BinaryReader br, byte checksumSize, bool hasChecksumInEntry, byte flagSize)
         {
             eKey = new Hash(br.ReadBytes(checksumSize));
             size = br.ReadUInt40(true);
-            priority = br.ReadByte();
+            priority = br.ReadSByte();
             
             if (hasChecksumInEntry)
             {
@@ -85,25 +115,17 @@ public class DownloadManifest
                 throw new Exception("Unexpected download flag size");
             }
         }
-    }
-    
-    public struct DownloadTag
-    {
-        public string name;
-        public ushort type;
-        public BitArray files;
 
-        public DownloadTag(BinaryReader br, int bytesPerTag)
+        public override string ToString()
         {
-            name = br.ReadCString();
-            type = br.ReadUInt16(true);
-
-            var fileBits = br.ReadBytes(bytesPerTag);
-
-            for (var j = 0; j < bytesPerTag; j++)
-                fileBits[j] = (byte)((fileBits[j] * 0x0202020202 & 0x010884422010) % 1023);
-
-            files = new BitArray(fileBits);
+            var sb = new StringBuilder();
+            sb.AppendLine($"[yellow]Key:[/] {eKey}");
+            sb.AppendLine($"[yellow]Size:[/] {size}");
+            sb.AppendLine($"[yellow]Priority:[/] {priority}");
+            sb.AppendLine($"[yellow]Checksum:[/] {checksum}");
+            sb.AppendLine($"[yellow]Flags:[/] {flags}");
+            sb.AppendLine($"[yellow]Tags:[/] {tagIndices}");
+            return sb.ToString();
         }
     }
     
@@ -138,13 +160,18 @@ public class DownloadManifest
     public override string ToString()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"[yellow]Version:[/] {version}");
-        sb.AppendLine($"[yellow]Hash Size:[/] {checksumSize}");
-        sb.AppendLine($"[yellow]Has Checksum In Entry:[/] {hasChecksumInEntry}");
-        sb.AppendLine($"[yellow]Num Entries:[/] {entryCount}");
-        sb.AppendLine($"[yellow]Num Tags:[/] {tagCount}");
-        sb.AppendLine($"[yellow]Flag Size:[/] {flagSize}");
-
+        sb.AppendLine($"[yellow]Version:[/] {m_version}");
+        sb.AppendLine($"[yellow]Hash Size:[/] {m_eKeySize}");
+        sb.AppendLine($"[yellow]Has Checksum In Entry:[/] {m_checkSumTypeConstant}");
+        sb.AppendLine($"[yellow]Num Entries:[/] {m_numEntries}");
+        sb.AppendLine($"[yellow]Num Tags:[/] {m_numTags}");
+        sb.AppendLine($"[yellow]Flag Size:[/] {m_numFlagsSize}");
+        sb.Append("[yellow]Tags:[/]");
+        foreach (var tag in tags)
+        {
+            sb.Append($"{tag.name} ");
+        }
+        sb.AppendLine();
         return sb.ToString();
     }
 }

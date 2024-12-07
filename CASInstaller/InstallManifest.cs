@@ -1,69 +1,58 @@
-﻿using System.Collections;
-using System.Text;
+﻿using System.Text;
 
 namespace CASInstaller;
 
 public class InstallManifest
 {
-    public byte version;
-    public byte hashSize;
-    public ushort numTags;
-    public uint numEntries;
-    public InstallTagEntry[] tags;
+    public int m_size;
+    public byte m_version;
+    public byte m_cKeySize;
+    public ushort m_numTags;
+    public uint m_numEntries;
+    public TagInfo[] tags;
     public InstallFileEntry[] entries;
     
     public InstallManifest(byte[] data)
     {
+        m_size = data.Length;
+
+        if (m_size <= 9)
+            throw new Exception($"Detected truncated install manifest. Only got {m_size} bytes, but minimum header size is 9 bytes.");
+        
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
         
-        var marker = br.ReadBytes(2);
-        var fileSignature = System.Text.Encoding.UTF8.GetString(marker);
-        if (fileSignature != "IN")
-            throw new Exception("Error while parsing install file. Did BLTE header size change?");
+        var magicBytes = br.ReadBytes(2);
+        var magicString = System.Text.Encoding.UTF8.GetString(magicBytes);
+        if (magicString != "IN")
+            throw new Exception("Invalid magic string in install manifest.");
 
-        version = br.ReadByte();        // 1
-        hashSize = br.ReadByte();       // 16 (MD5)
+        m_version = br.ReadByte();
         
-        if (hashSize != 16)
+        if (m_version != 1)
+            throw new Exception($"Unsupported install manifest version: {m_version}. This client only supports non-zero versions <= 1");
+        
+        m_cKeySize = br.ReadByte();       // 16 (MD5)
+        
+        if (m_cKeySize != 16)
             throw new Exception("Unsupported install hash size!");
 
-        numTags = br.ReadUInt16(true);
-        numEntries = br.ReadUInt32(true);
+        m_numTags = br.ReadUInt16(true);
+        m_numEntries = br.ReadUInt32(true);
 
-        var bytesPerTag = ((int)numEntries + 7) / 8;
+        var m_bitmapSize = (int)((m_numEntries + 7) >> 3);
 
-        tags = new InstallTagEntry[numTags];
+        tags = new TagInfo[m_numTags];
         
-        for (var i = 0; i < numTags; i++)
+        for (var i = 0; i < m_numTags; i++)
         {
-            tags[i] = new InstallTagEntry(br, bytesPerTag);
+            tags[i] = new TagInfo(br, m_bitmapSize);
         }
 
-        entries = new InstallFileEntry[numEntries];
-        for (var i = 0; i < numEntries; i++)
+        entries = new InstallFileEntry[m_numEntries];
+        for (var i = 0; i < m_numEntries; i++)
         {
-            entries[i] = new InstallFileEntry(br, numTags, hashSize, i, tags);
-        }
-    }
-    
-    public struct InstallTagEntry
-    {
-        public string name;
-        public ushort type;
-        public BitArray files;
-
-        public InstallTagEntry(BinaryReader br, int bytesPerTag)
-        {
-            name = br.ReadCString();
-            type = br.ReadUInt16(true);
-
-            var fileBits = br.ReadBytes(bytesPerTag);
-
-            for (var j = 0; j < bytesPerTag; j++)
-                fileBits[j] = (byte)((fileBits[j] * 0x0202020202 & 0x010884422010) % 1023);
-
-            files = new BitArray(fileBits);
+            entries[i] = new InstallFileEntry(br, m_numTags, m_cKeySize, i, tags);
         }
     }
 
@@ -72,19 +61,19 @@ public class InstallManifest
         public string name;
         public Hash contentHash;
         public uint size;
-        public HashSet<string> tagStrings;
+        public HashSet<int> tagIndices;
 
-        public InstallFileEntry(BinaryReader br, int numTags, int hashSize, int i, InstallTagEntry[] tags)
+        public InstallFileEntry(BinaryReader br, int numTags, int hashSize, int i, TagInfo[] tags)
         {
             name = br.ReadCString();
             contentHash = new Hash(br.ReadBytes(hashSize));
             size = br.ReadUInt32(true);
-            tagStrings = [];
+            tagIndices = [];
             for (var j = 0; j < numTags; j++)
             {
-                if (tags[j].files[i] == true)
+                if (tags[j].bitmap[i] == true)
                 {
-                    tagStrings.Add(tags[j].name);
+                    tagIndices.Add(j);
                 }
             }
         }
@@ -121,10 +110,10 @@ public class InstallManifest
     public override string ToString()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"[yellow]Version:[/] {version}");
-        sb.AppendLine($"[yellow]Hash Size:[/] {hashSize}");
-        sb.AppendLine($"[yellow]Num Tags:[/] {numTags}");
-        sb.AppendLine($"[yellow]Num Entries:[/] {numEntries}");
+        sb.AppendLine($"[yellow]Version:[/] {m_version}");
+        sb.AppendLine($"[yellow]Hash Size:[/] {m_cKeySize}");
+        sb.AppendLine($"[yellow]Num Tags:[/] {m_numTags}");
+        sb.AppendLine($"[yellow]Num Entries:[/] {m_numEntries}");
         sb.Append("[yellow]Tags:[/]");
         foreach (var tag in tags)
         {
