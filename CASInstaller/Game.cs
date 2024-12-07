@@ -18,6 +18,10 @@ public class Game(string product, string branch = "us")
     private List<string>? _installTags;
     private BuildConfig? _buildConfig;
     private CDNConfig? _cdnConfig;
+    private FileIndex? _fileIndex;
+    private FileIndex? _patchFileIndex;
+    private ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? _archiveGroup;
+    private ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? _patchGroup;
     private Encoding? _encoding;
     private DownloadManifest? _download;
     private InstallManifest? _install;
@@ -40,7 +44,15 @@ public class Game(string product, string branch = "us")
         
         _cdnConfig = await CDNConfig.GetConfig(_cdn, _version?.CdnConfigHash, _data_dir);
         _cdnConfig?.LogInfo();
-        ProcessCDNConfig(_cdn, _cdnConfig, _data_dir);
+        
+        _fileIndex = await FileIndex.GetDataIndex(_cdn, _cdnConfig?.FileIndex, "data", _data_dir);
+        _fileIndex?.Dump("fileindex.txt");
+        
+        _patchFileIndex = FileIndex.GetDataIndex(_cdn, _cdnConfig?.PatchFileIndex, "patch", _data_dir).Result;
+        _patchFileIndex?.Dump("patchfileindex.txt");
+        
+        _archiveGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.Archives, _cdnConfig?.ArchiveGroup, _data_dir, "data");
+        _patchGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.PatchArchives, _cdnConfig?.PatchArchiveGroup, _data_dir, "patch", true);
         
         var encodingContentHash = _buildConfig?.Encoding[0];
         var encodingEncodedHash = _buildConfig?.Encoding[1];
@@ -82,212 +94,54 @@ public class Game(string product, string branch = "us")
         if (!Directory.Exists(_data_dir))
             Directory.CreateDirectory(_data_dir);
     }
-    
-    const int BlockSize = 4096;
-    
-    private void ProcessCDNConfig(CDN? cdn, CDNConfig? cdnConfig, string? data_dir)
+
+    private static async Task<ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>?> ProcessIndices(
+        CDN? cdn, CDNConfig? cdnConfig, Hash[]? indices,  Hash? groupKey, string? data_dir, string pathType, bool overrideGroup = false)
     {
-        if (cdn == null || cdnConfig == null || data_dir == null)
-            return;
+        if (cdn == null || cdnConfig == null || data_dir == null || groupKey == null)
+            return null;
         
-        var fileIndex = FileIndex.GetDataIndex(cdn, cdnConfig?.FileIndex, "data", data_dir).Result;
-        using var sw = new StreamWriter("fileIndex.txt");
-        foreach (var entry in fileIndex.Entries)
+        var indexGroup = new ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>();
+
+        var saveDir = Path.Combine(data_dir, "indices");
+        var groupPath = Path.Combine(saveDir, groupKey?.KeyString + ".index");
+
+        if (File.Exists(groupPath) && !overrideGroup)
         {
-            sw.WriteLine($"{entry.Key},{entry.Value.size}");
+            // Load existing archive group index
+            _ = await ArchiveIndex.GetDataIndex(cdn, groupKey, pathType, data_dir, indexGroup, (ushort)0);
+            AnsiConsole.WriteLine(indexGroup.Count);
         }
-        
-        var patchFileIndex = FileIndex.GetDataIndex(cdn, cdnConfig?.PatchFileIndex, "patch", data_dir).Result;
-
-        var archiveGroup = new ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>();
-        var patchGroup = new ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>();
-
-        AnsiConsole.Progress().Start(ctx =>
+        else
         {
-            if (cdnConfig?.Archives != null)
+            AnsiConsole.Progress().Start(ctx =>
             {
-                var length = cdnConfig?.Archives.Length ?? 0;
-                var task1 = ctx.AddTask($"[green]Processing {cdnConfig?.Archives.Length} archives[/]");
+                if (indices == null) return;
+                var length = indices?.Length ?? 0;
+                var task1 = ctx.AddTask($"[green]Processing {indices?.Length} indices[/]");
                 task1.MaxValue = length;
                 Parallel.For(0, length, i =>
                 {
-                    var archive = cdnConfig?.Archives[i];
+                    var indexKey = indices?[i];
                     task1.Increment(1);
-                    var index = ArchiveIndex.GetDataIndex(cdn, archive, "data", data_dir, archiveGroup, (ushort)i).Result;
+                    _ = ArchiveIndex.GetDataIndex(cdn, indexKey, pathType, data_dir, indexGroup, (ushort)i).Result;
                 });
-            }
-
-            if (cdnConfig?.PatchArchives != null)
-            {
-                var length = cdnConfig?.PatchArchives.Length ?? 0;
-                var task2 = ctx.AddTask($"[green]Processing {cdnConfig?.PatchArchives.Length} patch archives[/]");
-                task2.MaxValue = length;
-                Parallel.For(0, length, i =>
-                {
-                    var archive = cdnConfig?.PatchArchives[i];
-                    task2.Increment(1);
-                    var index = ArchiveIndex.GetDataIndex(cdn, archive, "patch", data_dir, patchGroup, (ushort)i).Result;
-                });
-            }
-        });
-        
-        var archiveKeys = new List<Hash>(archiveGroup.Keys);
-        archiveKeys.Sort();
-        
-        var saveDir = Path.Combine(data_dir, "indices");
-        var archiveGroupPath = Path.Combine(saveDir, cdnConfig?.ArchiveGroup.KeyString + ".index");
-
-        using var fs = new FileStream(archiveGroupPath, FileMode.Create, FileAccess.Write);
-        using var bw = new BinaryWriter(fs);
-
-        // Buffer to hold the current block
-        var blockBuffer = new MemoryStream();
-        using var blockWriter = new BinaryWriter(blockBuffer);
-
-        List<Hash> lastBlockEkeys = new();
-        List<byte[]> md5s = new();
-        
-        Hash previousHash = default;
-        foreach (var hash in archiveKeys)
-        {
-            // If the block buffer exceeds the block size, flush it to the file
-            if (blockBuffer.Length + 26 >= BlockSize)
-            {
-                lastBlockEkeys.Add(previousHash);
-                var md5 = WriteBlockToFile(fs, blockBuffer, true);
-                md5s.Add(md5);
-            }
+                
+            });
             
-            var entry = archiveGroup[hash];
-
-            // Write entry to block buffer
-            blockWriter.Write(hash.Key);
-            blockWriter.Write(entry.size, true);
-            blockWriter.Write(entry.archiveIndex, true);
-            blockWriter.Write(entry.offset, true);
-            
-            previousHash = hash;
+            // Save the archive group index
+            ArchiveIndex.GenerateIndexGroupFile(indexGroup, groupPath);
         }
 
-        lastBlockEkeys.Add(previousHash);
-        
-        // Write the final block and pad if necessary
-        if (blockBuffer.Length > 0)
-        {
-            var md5 = WriteBlockToFile(fs, blockBuffer, true);
-            md5s.Add(md5);
-        }
-
-        // Write the TOC
-        // Write last block ekeys
-        using var tocMS = new MemoryStream();
-        using var tocBW = new BinaryWriter(tocMS);
-
-        // Write keys to the TOC
-        foreach (var key in lastBlockEkeys)
-        {
-            tocBW.Write(key.Key);
-        }
-
-        // Write the lower part of MD5 hashes
-        foreach (var md5 in md5s)
-        {
-            tocBW.Write(md5, 0, 8);
-        }
-
-        // Calculate the MD5 hash of the TOC
-        tocBW.Flush(); // Ensure all data is written to the MemoryStream
-        tocMS.Position = 0; // Reset the stream position for hashing
-
-        using var md5Hasher = MD5.Create();
-        var tocMD5 = md5Hasher.ComputeHash(tocMS);
-        
-        // Optionally, save the TOC to a file if needed
-        tocMS.Position = 0; // Reset position after hashing
-        tocMS.CopyTo(fs);
-        
-        // Write the TOC MD5 hash to the file
-        bw.Write(tocMD5, 0, 8);
-        
-        using var footerMS = new MemoryStream();
-        using var footerBW = new BinaryWriter(footerMS);
-        
-        // Write version
-        footerBW.Write((byte)1);
-        
-        // Write _11
-        footerBW.Write((byte)0);
-        
-        // Write _12
-        footerBW.Write((byte)0);
-        
-        // Write block size
-        footerBW.Write((byte)4);
-        
-        // Write offset bytes
-        footerBW.Write((byte)6);
-        
-        // Write size bytes
-        footerBW.Write((byte)4);
-        
-        // Write key size bytes
-        footerBW.Write((byte)16);
-        
-        // Write checksum size
-        footerBW.Write((byte)8);
-        
-        // Write number of elements
-        footerBW.Write(archiveKeys.Count);
-        
-        footerBW.Write(new byte[8]);
-        
-        footerBW.Flush(); // Ensure all data is written to the MemoryStream
-        footerMS.Position = 0; // Reset the stream position for hashing
-        
-        var footerMD5 = md5Hasher.ComputeHash(footerMS);
-        
-        footerMS.Position = 0; // Reset position after hashing
-        footerMS.CopyToAsync(fs);
-        
-        // Write the footer MD5 hash to the file
-        bw.BaseStream.Position -= 8;
-        bw.Write(footerMD5, 0, 8);
+        return indexGroup;
     }
     
-    // Method to write a block to the file, pad if necessary, and return the MD5 hash
-    static byte[] WriteBlockToFile(Stream stream, MemoryStream blockBuffer, bool pad = false)
-    {
-        if (pad)
-        {
-            var padding = BlockSize - blockBuffer.Length;
-            if (padding > 0)
-            {
-                blockBuffer.Write(new byte[padding], 0, (int)padding);
-            }
-        }
-
-        // Reset position to calculate MD5 and copy to stream
-        blockBuffer.Position = 0;
-
-        // Calculate MD5 hash
-        using var md5 = MD5.Create();
-        var hash = md5.ComputeHash(blockBuffer);
-
-        // Write the block to the stream
-        blockBuffer.Position = 0; // Reset position after hashing
-        blockBuffer.CopyToAsync(stream);
-
-        // Reset the block buffer for reuse
-        blockBuffer.SetLength(0);
-
-        // Return the MD5 hash
-        return hash;
-    }
-
-    private static async Task ProcessInstall(InstallManifest? install, List<string> tags)
+    private static async Task ProcessInstall(InstallManifest? install, List<string>? tags)
     {
         if (install == null)
             return;
+        
+        tags ??= [];
         
         // Filter entries by tags
         var tagFilteredEntries = new List<InstallManifest.InstallFileEntry>();
@@ -364,10 +218,12 @@ public class Game(string product, string branch = "us")
         */
     }
 
-    private void ProcessDownload(DownloadManifest? download, List<string> tags)
+    private void ProcessDownload(DownloadManifest? download, List<string>? tags)
     {
         if (download == null)
             return;
+
+        tags ??= [];
         
         // Add locale tags
         //tags.Clear();

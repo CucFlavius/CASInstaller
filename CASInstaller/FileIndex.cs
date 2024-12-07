@@ -103,9 +103,9 @@ public struct FileIndex
         return indexes;
     }
     
-    public static async Task<FileIndex> GetDataIndex(CDN? cdn, Hash? key, string pathType, string data_dir)
+    public static async Task<FileIndex> GetDataIndex(CDN? cdn, Hash? key, string pathType, string? data_dir)
     {
-        if (cdn == null || key == null)
+        if (cdn == null || key == null || data_dir == null)
             return new FileIndex([]);
         
         if (key?.KeyString == null)
@@ -162,5 +162,14 @@ public struct FileIndex
         }
 
         return new FileIndex([]);
+    }
+
+    public void Dump(string path)
+    {
+        using var sw = new StreamWriter(path);
+        foreach (var entry in Entries)
+        {
+            sw.WriteLine($"{entry.Key},{entry.Value.size}");
+        }
     }
 }
