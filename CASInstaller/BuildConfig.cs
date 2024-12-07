@@ -169,9 +169,9 @@ public struct BuildConfig
     
     public static async Task<BuildConfig> GetBuildConfig(CDN? cdn, Hash? key, string? data_dir)
     {
-        if (cdn == null || key == null || data_dir == null) return new BuildConfig();
+        if (cdn == null || key == null) return new BuildConfig();
         
-        var saveDir = Path.Combine(data_dir, "config", key?.KeyString?[0..2] ?? "", key?.KeyString?[2..4] ?? "");
+        var saveDir = Path.Combine(data_dir ?? "", "config", key?.KeyString?[0..2] ?? "", key?.KeyString?[2..4] ?? "");
         var savePath = Path.Combine(saveDir, key?.KeyString ?? "");
         
         if (File.Exists(savePath))
@@ -196,9 +196,12 @@ public struct BuildConfig
 
                 if (data == null) continue;
 
-                if (!Directory.Exists(saveDir))
-                    Directory.CreateDirectory(saveDir);
-                await File.WriteAllBytesAsync(savePath, data);
+                if (data_dir != null)
+                {
+                    if (!Directory.Exists(saveDir))
+                        Directory.CreateDirectory(saveDir);
+                    await File.WriteAllBytesAsync(savePath, data);
+                }
 
                 return new BuildConfig(data);
             }
@@ -211,12 +214,18 @@ public struct BuildConfig
     {
         var sb = new StringBuilder();
         sb.AppendLine($"[yellow]Root:[/] {Root}");
-        sb.AppendLine($"[yellow]Download:[/] {string.Join(" ", Download)}");
-        sb.AppendLine($"[yellow]Install:[/] {string.Join(" ", Install)}");
-        sb.AppendLine($"[yellow]Encoding:[/] {string.Join(" ", Encoding)}");
-        sb.AppendLine($"[yellow]EncodingSize:[/] {string.Join(" ", EncodingSize)}");
-        sb.AppendLine($"[yellow]Size:[/] {string.Join(" ", Size)}");
-        sb.AppendLine($"[yellow]SizeSize:[/] {string.Join(" ", SizeSize)}");
+        if (Download != null)
+            sb.AppendLine($"[yellow]Download:[/] {string.Join(" ", Download)}");
+        if (Install != null)
+            sb.AppendLine($"[yellow]Install:[/] {string.Join(" ", Install)}");
+        if (Encoding != null)
+            sb.AppendLine($"[yellow]Encoding:[/] {string.Join(" ", Encoding)}");
+        if (EncodingSize != null)
+            sb.AppendLine($"[yellow]EncodingSize:[/] {string.Join(" ", EncodingSize)}");
+        if (Size != null)
+            sb.AppendLine($"[yellow]Size:[/] {string.Join(" ", Size)}");
+        if (SizeSize != null)
+            sb.AppendLine($"[yellow]SizeSize:[/] {string.Join(" ", SizeSize)}");
         sb.AppendLine($"[yellow]BuildName:[/] {BuildName}");
         sb.AppendLine($"[yellow]BuildPlaybuildInstaller:[/] {BuildPlaybuildInstaller}");
         sb.AppendLine($"[yellow]BuildProduct:[/] {BuildProduct}");
@@ -232,13 +241,17 @@ public struct BuildConfig
         sb.AppendLine($"[yellow]BuildFixedHash:[/] {BuildFixedHash}");
         sb.AppendLine($"[yellow]BuildReplayHash:[/] {BuildReplayHash}");
         sb.AppendLine($"[yellow]BuildManifestVersion:[/] {BuildManifestVersion}");
-        sb.AppendLine($"[yellow]InstallSize:[/] {string.Join(" ", InstallSize)}");
-        sb.AppendLine($"[yellow]DownloadSize:[/] {string.Join(" ", DownloadSize)}");
+        if (InstallSize != null)
+            sb.AppendLine($"[yellow]InstallSize:[/] {string.Join(" ", InstallSize)}");
+        if (DownloadSize != null)
+            sb.AppendLine($"[yellow]DownloadSize:[/] {string.Join(" ", DownloadSize)}");
         sb.AppendLine($"[yellow]PartialPriority:[/] {PartialPriority}");
         sb.AppendLine($"[yellow]PartialPrioritySize:[/] {PartialPrioritySize}");
         sb.AppendLine($"[yellow]BuildSignatureFile:[/] {BuildSignatureFile}");
-        sb.AppendLine($"[yellow]PatchIndex:[/] {string.Join(" ", PatchIndex)}");
-        sb.AppendLine($"[yellow]PatchIndexSize:[/] {string.Join(" ", PatchIndexSize)}");
+        if (PatchIndex != null)
+            sb.AppendLine($"[yellow]PatchIndex:[/] {string.Join(" ", PatchIndex)}");
+        if (PatchIndexSize != null)
+            sb.AppendLine($"[yellow]PatchIndexSize:[/] {string.Join(" ", PatchIndexSize)}");
         return sb.ToString();
     }
 

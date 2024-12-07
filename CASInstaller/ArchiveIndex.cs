@@ -115,13 +115,13 @@ public struct ArchiveIndex
         }
     }
     
-    public static async Task<ArchiveIndex> GetDataIndex(CDN? cdn, Hash? key, string pathType, string data_dir,
+    public static async Task<ArchiveIndex> GetDataIndex(CDN? cdn, Hash? key, string pathType, string? data_dir,
         ConcurrentDictionary<Hash, IndexEntry>? archiveGroup, ushort index = 0)
     {
         if (cdn == null || key?.KeyString == null)
             return new ArchiveIndex([], index, archiveGroup);
         
-        var saveDir = Path.Combine(data_dir, "indices");
+        var saveDir = Path.Combine(data_dir ?? "", "indices");
         var savePath = Path.Combine(saveDir, key + ".index");
         
         if (File.Exists(savePath))
@@ -162,10 +162,13 @@ public struct ArchiveIndex
                         data = ArmadilloCrypt.Instance.DecryptData(key, data);
                     }
                 }
-                
-                if (!Directory.Exists(saveDir))
-                    Directory.CreateDirectory(saveDir);
-                await File.WriteAllBytesAsync(savePath, data);
+
+                if (data_dir != null)
+                {
+                    if (!Directory.Exists(saveDir))
+                        Directory.CreateDirectory(saveDir);
+                    await File.WriteAllBytesAsync(savePath, data);
+                }
 
                 return new ArchiveIndex(data, index, archiveGroup);
             }

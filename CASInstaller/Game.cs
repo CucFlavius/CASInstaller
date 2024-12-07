@@ -38,7 +38,7 @@ public class Game(string product, string branch = "us")
             Directory.CreateDirectory(cache_dir);
         
         _installPath = installPath;
-
+        
         BLTE.BLTEStream.ThrowOnMissingDecryptionKey = false;
         KeyService.LoadKeys();
         
@@ -47,7 +47,7 @@ public class Game(string product, string branch = "us")
         
         _version = await Version.GetVersion(_product, _branch);
         _version?.LogInfo();
-
+        
         _productConfig = await ProductConfig.GetProductConfig(_cdn, _version?.ProductConfigHash);
         ProcessProductConfig(_productConfig, _installPath);
         
@@ -88,8 +88,10 @@ public class Game(string product, string branch = "us")
         WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
         WritePatchResult(_game_dir);
         WriteLauncherDB(_game_dir);
+        
+        await DownloadLauncher("launcher", ["Windows", "wow"], _branch, _game_dir);
     }
-
+    
     private void ProcessProductConfig(ProductConfig? productConfig, string installPath)
     {
         if (productConfig == null)
@@ -115,12 +117,12 @@ public class Game(string product, string branch = "us")
         CDN? cdn, CDNConfig? cdnConfig, Hash[]? indices, Hash? groupKey, string? data_dir,
         string pathType, byte offsetBytes, bool overrideGroup = false)
     {
-        if (cdn == null || cdnConfig == null || data_dir == null || groupKey == null)
+        if (cdn == null || cdnConfig == null || groupKey == null)
             return null;
         
         var indexGroup = new ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>();
 
-        var saveDir = Path.Combine(data_dir, "indices");
+        var saveDir = Path.Combine(data_dir ?? "", "indices");
         var groupPath = Path.Combine(saveDir, groupKey?.KeyString + ".index");
 
         if (File.Exists(groupPath) && !overrideGroup)
@@ -147,7 +149,8 @@ public class Game(string product, string branch = "us")
             });
             
             // Save the archive group index
-            ArchiveIndex.GenerateIndexGroupFile(indexGroup, groupPath, offsetBytes);
+            if (data_dir != null)
+                ArchiveIndex.GenerateIndexGroupFile(indexGroup, groupPath, offsetBytes);
         }
 
         return indexGroup;
@@ -158,7 +161,7 @@ public class Game(string product, string branch = "us")
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags,
         string? shared_game_dir, bool overrideFiles = false)
     {
-        if (install == null || cdn == null || encoding == null || archiveGroup == null || shared_game_dir == null)
+        if (install == null || cdn == null || encoding == null || shared_game_dir == null)
             return;
         
         tags ??= [];
@@ -176,9 +179,12 @@ public class Game(string product, string branch = "us")
             var checksOut = true;
             foreach (var tag in tags)
             {
-                if (!entry.tagIndices.Contains(tagIndexMap[tag]))
+                if (tagIndexMap.TryGetValue(tag, out var tagIndex))
                 {
-                    checksOut = false;
+                    if (!entry.tagIndices.Contains(tagIndex))
+                    {
+                        checksOut = false;
+                    }
                 }
             }
             
@@ -199,7 +205,7 @@ public class Game(string product, string branch = "us")
 
             byte[]? data = null;
             
-            if (archiveGroup.TryGetValue(key, out var indexEntry))
+            if (archiveGroup != null && archiveGroup.TryGetValue(key, out var indexEntry))
             {
                 try
                 {
@@ -531,5 +537,27 @@ public class Game(string product, string branch = "us")
         var data = "enUS"u8.ToArray();
         File.WriteAllBytes(path, data);
         File.SetAttributes(path, FileAttributes.Hidden);
+    }
+    
+    private async Task DownloadLauncher(string gameProduct, List<string> tags, string? branch, string? game_dir)
+    {
+        var data_dir = Path.Combine(game_dir ?? "", ".battle.net");
+        if (!Directory.Exists(data_dir))
+            Directory.CreateDirectory(data_dir);
+        
+        //var version = "http://us.patch.battle.net:1119/bts/versions";
+        var launcher_version = await Version.GetVersion("bts", gameProduct);
+        var launcher_cdn = await CDN.GetCDN("bts", branch);
+        var launcher_buildConfig = await BuildConfig.GetBuildConfig(launcher_cdn, launcher_version.BuildConfigHash, data_dir);
+        var launcher_cdnConfig = await CDNConfig.GetConfig(launcher_cdn, launcher_version.CdnConfigHash, data_dir);
+        var launcher_archiveGroup = await ProcessIndices(
+            launcher_cdn, launcher_cdnConfig, launcher_cdnConfig.Archives, launcher_cdnConfig.ArchiveGroup,
+            data_dir, "data", 6);
+        var launcher_encoding = await Encoding.GetEncoding(launcher_cdn, launcher_buildConfig.Encoding[1]);
+        var launcher_fileIndex = await FileIndex.GetDataIndex(launcher_cdn, launcher_cdnConfig.FileIndex, "data", data_dir);
+        var launcher_install = await InstallManifest.GetInstall(launcher_cdn, launcher_buildConfig.Install[1]);
+        await ProcessInstall(launcher_install, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
+
+        File.SetAttributes(data_dir, FileAttributes.Hidden);
     }
 }

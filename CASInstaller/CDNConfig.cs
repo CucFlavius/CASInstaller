@@ -96,9 +96,9 @@ public struct CDNConfig
     
     public static async Task<CDNConfig> GetConfig(CDN? cdn, Hash? key, string? data_dir)
     {
-        if (cdn == null || key == null || data_dir == null) return new CDNConfig(string.Empty);
+        if (cdn == null || key == null) return new CDNConfig(string.Empty);
         
-        var saveDir = Path.Combine(data_dir, "config", key?.KeyString?[0..2] ?? "", key?.KeyString?[2..4] ?? "");
+        var saveDir = Path.Combine(data_dir ?? "", "config", key?.KeyString?[0..2] ?? "", key?.KeyString?[2..4] ?? "");
         var savePath = Path.Combine(saveDir, key?.KeyString ?? "");
         
         if (File.Exists(savePath))
@@ -123,11 +123,14 @@ public struct CDNConfig
                 else
                     data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
                 if (data == null) continue;
-                
-                if (!Directory.Exists(saveDir))
-                    Directory.CreateDirectory(saveDir);
-                await File.WriteAllBytesAsync(savePath, data);
-                
+
+                if (data_dir != null)
+                {
+                    if (!Directory.Exists(saveDir))
+                        Directory.CreateDirectory(saveDir);
+                    await File.WriteAllBytesAsync(savePath, data);
+                }
+
                 var stringData = System.Text.Encoding.UTF8.GetString(data);
                 return new CDNConfig(stringData);
             }
