@@ -76,7 +76,7 @@ public class Game(string product, string branch = "us")
         var downloadEncodedHash = _buildConfig?.Download[1];
         _download = await DownloadManifest.GetDownload(_cdn, downloadEncodedHash);
         _download?.LogInfo();
-        ProcessDownload(_download, _installTags);
+        await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
 
         var installContentHash = _buildConfig?.Install[0];
         var installEncodedHash = _buildConfig?.Install[1];
@@ -89,7 +89,7 @@ public class Game(string product, string branch = "us")
         WritePatchResult(_game_dir);
         WriteLauncherDB(_game_dir);
         
-        await DownloadLauncher("launcher", ["Windows", "wow"], _branch, _game_dir);
+        await DownloadLauncher(_productConfig, _branch, _game_dir);
     }
     
     private void ProcessProductConfig(ProductConfig? productConfig, string installPath)
@@ -327,7 +327,10 @@ public class Game(string product, string branch = "us")
         return null;
     }
     
-    private void ProcessDownload(DownloadManifest? download, List<string>? tags)
+    private async Task ProcessDownload(
+        DownloadManifest? download, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
+        ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags,
+        string? shared_game_dir, bool overrideFiles = false)
     {
         if (download == null)
             return;
@@ -356,12 +359,16 @@ public class Game(string product, string branch = "us")
         foreach (var entry in download.entries)
         {
             var checksOut = true;
+            
             foreach (var tag in tags)
             {
-                if ((entry.tagIndices & (1 << tagIndexMap[tag])) == 0)
+                if (tagIndexMap.TryGetValue(tag, out var tagIndex))
                 {
-                    checksOut = false;
-                    break;
+                    if ((entry.tagIndices & (1 << tagIndex)) == 0)
+                    {
+                        checksOut = false;
+                        break;
+                    }
                 }
             }
 
@@ -539,25 +546,45 @@ public class Game(string product, string branch = "us")
         File.SetAttributes(path, FileAttributes.Hidden);
     }
     
-    private async Task DownloadLauncher(string gameProduct, List<string> tags, string? branch, string? game_dir)
+    private async Task DownloadLauncher(ProductConfig? productConfig, string? branch, string? game_dir)
     {
+        if (productConfig == null)
+            return;
+
+        var tags = new List<string>();
+        tags.AddRange(productConfig.platform.win.config.tags);  // Eg. Add "Windows" tag
+        
+        var product_tag = productConfig.all.config.launcher_install_info.product_tag;
+        var bootstrapper_product = productConfig.all.config.launcher_install_info.bootstrapper_product; // "bts"
+        var bootstrapper_branch = productConfig.all.config.launcher_install_info.bootstrapper_branch;   // "launcher"
+        tags.Add(product_tag);  // Eg. Add "wow" tag
+        
         var data_dir = Path.Combine(game_dir ?? "", ".battle.net");
         if (!Directory.Exists(data_dir))
             Directory.CreateDirectory(data_dir);
         
         //var version = "http://us.patch.battle.net:1119/bts/versions";
-        var launcher_version = await Version.GetVersion("bts", gameProduct);
-        var launcher_cdn = await CDN.GetCDN("bts", branch);
+        var launcher_version = await Version.GetVersion(bootstrapper_product, bootstrapper_branch);
+        launcher_version.LogInfo();
+        var launcher_cdn = await CDN.GetCDN(bootstrapper_product, branch);
+        launcher_cdn.LogInfo();
         var launcher_buildConfig = await BuildConfig.GetBuildConfig(launcher_cdn, launcher_version.BuildConfigHash, data_dir);
+        launcher_buildConfig.LogInfo();
         var launcher_cdnConfig = await CDNConfig.GetConfig(launcher_cdn, launcher_version.CdnConfigHash, data_dir);
+        launcher_cdnConfig.LogInfo();
         var launcher_archiveGroup = await ProcessIndices(
             launcher_cdn, launcher_cdnConfig, launcher_cdnConfig.Archives, launcher_cdnConfig.ArchiveGroup,
             data_dir, "data", 6);
         var launcher_encoding = await Encoding.GetEncoding(launcher_cdn, launcher_buildConfig.Encoding[1]);
+        launcher_encoding.LogInfo();
         var launcher_fileIndex = await FileIndex.GetDataIndex(launcher_cdn, launcher_cdnConfig.FileIndex, "data", data_dir);
         var launcher_install = await InstallManifest.GetInstall(launcher_cdn, launcher_buildConfig.Install[1]);
+        launcher_install?.LogInfo();
+        //launcher_install.Dump("launcher_install.txt");
         await ProcessInstall(launcher_install, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
-
+        var launcher_download = await DownloadManifest.GetDownload(launcher_cdn, launcher_buildConfig.Download[1]);
+        launcher_download.LogInfo();
+        await ProcessDownload(launcher_download, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
         File.SetAttributes(data_dir, FileAttributes.Hidden);
     }
 }
