@@ -1,8 +1,5 @@
 ﻿using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text.Json;
 using Google.Protobuf;
-using Google.Protobuf.Collections;
 using ProtoDatabase;
 using Spectre.Console;
 
@@ -10,6 +7,9 @@ namespace CASInstaller;
 
 public class Game(string product, string branch = "us")
 {
+    private readonly byte[] reconstruction_hash = [0xD9, 0x4B, 0xCD, 0x8C, 0x43, 0x18, 0x6B, 0x30, 0xEC, 0xC7, 0xDB, 0xE1, 0x11, 0x00];
+    private const int DATA_TOTAL_SIZE_MAXIMUM = 1023 * 1024 * 1024;
+    private const int DATA_OFFSET_START = 480;
     private const string cache_dir = "cache";
     private readonly string? _product = product;
     private readonly string? _branch = branch;
@@ -32,6 +32,10 @@ public class Game(string product, string branch = "us")
     private DownloadManifest? _download;
     private InstallManifest? _install;
 
+    public int Working_Data { get; set; } = 0;
+    public int Working_Offset { get; set; } = DATA_OFFSET_START;
+    public FileStream? Working_Stream { get; set; }
+    
     public async Task Install(string installPath)
     {
         if (!Directory.Exists(cache_dir))
@@ -76,7 +80,7 @@ public class Game(string product, string branch = "us")
         var downloadEncodedHash = _buildConfig?.Download[1];
         _download = await DownloadManifest.GetDownload(_cdn, downloadEncodedHash);
         _download?.LogInfo();
-        await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
+        await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _data_dir);
 
         var installContentHash = _buildConfig?.Install[0];
         var installEncodedHash = _buildConfig?.Install[1];
@@ -330,7 +334,7 @@ public class Game(string product, string branch = "us")
     private async Task ProcessDownload(
         DownloadManifest? download, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags,
-        string? shared_game_dir, bool overrideFiles = false)
+        string? data_dir, bool overrideFiles = false)
     {
         if (download == null)
             return;
@@ -338,15 +342,20 @@ public class Game(string product, string branch = "us")
         tags ??= [];
         
         // Add locale tags
-        //tags.Clear();
         tags.Add("enUS");
 
-        //var testIDX = new IDX("Z:\\World of Warcraft\\Data\\data\\0000000010.idx");
+        var dataDir = Path.Combine(data_dir ?? "", "data");
+        if (!Directory.Exists(dataDir))
+            Directory.CreateDirectory(dataDir);
+        const byte idxN = 1;        // Only need to increase this number if we update the game
+        var idxMap = new Dictionary<byte, IDX>();
+        for (var i = 0; i < 16; i++)
+        {
+            var bucket = (byte)i;
+            var path = Path.Combine(dataDir, $"{bucket:X2}000000{idxN:X2}.idx");
+            idxMap.Add(bucket, new IDX(path, bucket));
+        }
         
-        if (File.Exists("download_index0.txt"))
-            File.Delete("download_index0.txt");
-        using var sw = new StreamWriter("download_index0.txt");
-
         ulong totalDownloadSize = 0;
 
         var tagFilteredEntries = new List<DownloadManifest.DownloadEntry>();
@@ -376,44 +385,119 @@ public class Game(string product, string branch = "us")
                 tagFilteredEntries.Add(entry);
         }
         
-        foreach (var entry in tagFilteredEntries)
+        foreach (var downloadEntry in tagFilteredEntries)
         {
-            if (entry.priority is 0 or 1)
+            if (downloadEntry.priority is 0 or 1)
             {
-                totalDownloadSize += entry.size;
-                var index = cascGetBucketIndex(entry.eKey);
-                if (index == 0)
+                totalDownloadSize += downloadEntry.size;
+                var bucket = cascGetBucketIndex(downloadEntry.eKey);
+
+                if (idxMap.TryGetValue(bucket, out var idx))
                 {
-                    sw.WriteLine(entry.eKey.KeyString);
-                    /*
-                    var key9 = new Hash(entry.eKey.Key, true);
-                    if (!testIDX.LocalIndexData.ContainsKey(key9))
+                    if (Working_Offset + (int)downloadEntry.size > DATA_TOTAL_SIZE_MAXIMUM)
                     {
-                        AnsiConsole.WriteLine();
-                        AnsiConsole.MarkupLine($"[red]EKey:[/] {entry.eKey}");
-                        AnsiConsole.MarkupLine($"[red]Size:[/] {entry.size}");
-                        AnsiConsole.MarkupLine($"[red]Priority:[/] {entry.priority}");
-                        AnsiConsole.Markup($"[red]Tags:[/]");
-                        foreach (var tag in tagIndexMap)
+                        Working_Offset = DATA_OFFSET_START;
+                        if (Working_Stream != null)
                         {
-                            if ((entry.tagIndices & (1 << tag.Value)) != 0)
-                                AnsiConsole.Markup($"{tag.Key} ");
+                            Working_Stream?.Close();
+                            Working_Stream = null;
                         }
-                        AnsiConsole.WriteLine();
+
+                        Working_Data++;
                     }
-                    */
+                    var idxEntry = idx.Add(downloadEntry.eKey, Working_Data, Working_Offset, downloadEntry.size);
+                    Working_Offset += (int)downloadEntry.size;
+                    
+                    WriteDataEntry(idxEntry, downloadEntry, cdn, cdnConfig, encoding, archiveGroup, dataDir);
                 }
-                //sw.WriteLine($"{entry.eKey},{entry.size},{entry.priority},{entry.checksum},{entry.flags}");
             }
         }
         AnsiConsole.MarkupLine($"[bold green]Total download size: {totalDownloadSize}[/]");
+
+        foreach (var (key, idx) in idxMap)
+        {
+            if (File.Exists(idx.Path))
+                File.Delete(idx.Path);
+
+            idx.Write();
+        }
     }
 
-    private static int cascGetBucketIndex(Hash key)
+    private void WriteDataEntry(IDX.Entry idxEntry, DownloadManifest.DownloadEntry downloadEntry, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, string dataDir)
+    {
+        if (Working_Stream == null)
+        {
+            var dataPath = Path.Combine(dataDir, $"data.{Working_Data:D3}");
+            Working_Stream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+            using var bw = new BinaryWriter(Working_Stream);
+            casReconstructionHeaderSerialize(bw, Working_Data, Working_Offset);
+        }
+    }
+
+    enum casIndexChannel : byte
+    {
+        Data = 0x0,
+        Meta = 0x1,
+    }
+    
+    struct DataHeader
+    {
+        public byte[] BLTEHash;
+        public uint size;
+        public casIndexChannel channel;
+        private uint checksumA;
+        private uint checksumB;
+
+        public void Write(BinaryWriter bw, ushort archiveIndex, uint archiveOffset)
+        {
+            using var headerMs = new MemoryStream();
+            using var headerBw = new BinaryWriter(headerMs);
+            headerBw.Write(BLTEHash);
+            headerBw.Write(size);
+            headerBw.Write((byte)channel);
+            headerBw.Write((byte)0);
+
+            headerBw.Flush();
+            headerMs.Position = 0;
+            var checksumA = HashAlgo.HashLittle(headerMs.ToArray(), 0x16, 0x3D6BE971);
+            headerMs.Position = 0x16;
+            headerBw.Write(checksumA);
+            
+            headerBw.Flush();
+            headerMs.Position = 0;
+            var checksumB = HashAlgo.CalculateChecksum(headerMs.ToArray(), archiveIndex, archiveOffset);
+            headerMs.Position = 0x1A;
+            headerBw.Write(checksumB);
+
+            bw.Write(headerMs.ToArray());
+        }
+    }
+    
+    private void casReconstructionHeaderSerialize(BinaryWriter bw, int dataNumber, int dataOffset)
+    {
+        byte[] indices = [12, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13];
+        for (var i = 0; i < 16; i++)
+        {
+            var BLTEHash = new byte[16];
+            Array.Copy(reconstruction_hash, 0, BLTEHash, 0, 14);  // Copy the first 14 bytes
+            BLTEHash[14] = (byte)dataNumber;  // Set the dataNumber at index 14
+            BLTEHash[15] = indices[i];  // Set the indexNumber at index 15
+            
+            var header = new DataHeader()
+            {
+                BLTEHash = BLTEHash,
+                size = 30,
+                channel = casIndexChannel.Meta,
+            };
+            header.Write(bw, (ushort)dataNumber, (uint)(0x1e * i));
+        }
+    }
+
+    private static byte cascGetBucketIndex(Hash key)
     {
         var k = key.Key;
         var i = k[0] ^ k[1] ^ k[2] ^ k[3] ^ k[4] ^ k[5] ^ k[6] ^ k[7] ^ k[8];
-        return (i & 0xf) ^ (i >> 4);
+        return (byte)((i & 0xf) ^ (i >> 4));
     }
     
     private static int cascGetBucketIndexCrossReference(Hash key)
@@ -577,6 +661,7 @@ public class Game(string product, string branch = "us")
             data_dir, "data", 6);
         var launcher_encoding = await Encoding.GetEncoding(launcher_cdn, launcher_buildConfig.Encoding[1]);
         launcher_encoding.LogInfo();
+        launcher_encoding.Dump("launcher_encoding.txt");
         var launcher_fileIndex = await FileIndex.GetDataIndex(launcher_cdn, launcher_cdnConfig.FileIndex, "data", data_dir);
         var launcher_install = await InstallManifest.GetInstall(launcher_cdn, launcher_buildConfig.Install[1]);
         launcher_install?.LogInfo();
@@ -584,7 +669,21 @@ public class Game(string product, string branch = "us")
         await ProcessInstall(launcher_install, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
         var launcher_download = await DownloadManifest.GetDownload(launcher_cdn, launcher_buildConfig.Download[1]);
         launcher_download.LogInfo();
-        await ProcessDownload(launcher_download, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
+        await ProcessDownload(launcher_download, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, data_dir);
         File.SetAttributes(data_dir, FileAttributes.Hidden);
+    }
+
+    private void TestGenerateSegmentHeaderKeys()
+    {
+        CasContainerIndex casContainerIndex = new CasContainerIndex("World of Warcraft", 32, CasDynamicOpenMode.Reconstruction);
+        var shortSegmentKeys = new CasContainerIndex.CasIndexKey[16];
+        var keys = new CasContainerIndex.CasKey[16];
+        casContainerIndex.GenerateSegmentHeaderKeys(0, shortSegmentKeys, keys);
+
+        foreach (var key in shortSegmentKeys)
+        {
+            var reversed = key.Data.Reverse().ToArray();
+            AnsiConsole.WriteLine(reversed.ToHexString());
+        }
     }
 }
