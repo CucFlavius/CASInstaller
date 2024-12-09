@@ -295,4 +295,12 @@ public static class Extensions
         str = str.Replace(" ", string.Empty);
         return Convert.FromHexString(str);
     }
+    
+    public static void WriteInt32BE(this BinaryWriter bw, int value)
+    {
+        bw.Write((byte)((value >> 24) & 0xFF));
+        bw.Write((byte)((value >> 16) & 0xFF));
+        bw.Write((byte)((value >> 8) & 0xFF));
+        bw.Write((byte)(value & 0xFF));
+    }
 }

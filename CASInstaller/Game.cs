@@ -31,15 +31,17 @@ public class Game(string product, string branch = "us")
     private Encoding? _encoding;
     private DownloadManifest? _download;
     private InstallManifest? _install;
+    private Dictionary<byte, IDX> idxMap;
+    private string gameDataDir;
 
     public int Working_Data { get; set; } = 0;
     public int Working_Offset { get; set; } = DATA_OFFSET_START;
-    public FileStream? Working_Stream { get; set; }
-    
+    public MemoryStream? Working_Stream { get; set; }
+
     public async Task Install(string installPath)
     {
-        TestGenerateSegmentHeaderKeys();
-        return;
+        //TestGenerateSegmentHeaderKeys();
+        //return;
         
         if (!Directory.Exists(cache_dir))
             Directory.CreateDirectory(cache_dir);
@@ -75,7 +77,7 @@ public class Game(string product, string branch = "us")
         
         var encodingContentHash = _buildConfig?.Encoding[0];
         var encodingEncodedHash = _buildConfig?.Encoding[1];
-        _encoding = await Encoding.GetEncoding(_cdn, encodingEncodedHash);
+        _encoding = await Encoding.GetEncoding(_cdn, encodingEncodedHash, 0, true);
         _encoding?.LogInfo();
         _encoding?.Dump("encoding.txt");
         
@@ -83,15 +85,32 @@ public class Game(string product, string branch = "us")
         var downloadEncodedHash = _buildConfig?.Download[1];
         _download = await DownloadManifest.GetDownload(_cdn, downloadEncodedHash);
         _download?.LogInfo();
-        await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags, _data_dir);
 
         var installContentHash = _buildConfig?.Install[0];
         var installEncodedHash = _buildConfig?.Install[1];
         _install = await InstallManifest.GetInstall(_cdn, installEncodedHash);
         _install?.Dump("install.txt");
         _install?.LogInfo();
+        
+        // Download data //
+        gameDataDir = Path.Combine(_data_dir ?? "", "data");
+        if (!Directory.Exists(gameDataDir))
+            Directory.CreateDirectory(gameDataDir);
+        
+        BuildIDXMap(gameDataDir);
+        
+        //if (_encoding!.contentEntries.TryGetValue((Hash)_buildConfig?.Root!, out var rootEncodingEntry))
+        //    await DownloadAndWriteFile((Hash)_buildConfig?.Root!, _cdn, _cdnConfig, _archiveGroup, rootEncodingEntry.size);
+        await DownloadAndWriteFile((Hash)downloadEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.DownloadSize[1]!));
+        await DownloadAndWriteFile((Hash)installEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.InstallSize[1]!));
+        await DownloadAndWriteFile((Hash)encodingEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.EncodingSize[1]!));
+        await DownloadAndWriteFile((Hash)_buildConfig?.Size[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.SizeSize[1]!));
+        
+        await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags, _data_dir);
         await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
 
+        await DataFileComplete(idxMap);
+        
         WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
         WritePatchResult(_game_dir);
         WriteLauncherDB(_game_dir);
@@ -217,16 +236,6 @@ public class Game(string product, string branch = "us")
                 try
                 {
                     data = await DownloadFileFromIndex(indexEntry, cdn, cdnConfig);
-
-                    // Install file is BLTE encoded
-                    if (data != null)
-                    {
-                        using var ms = new MemoryStream(data);
-                        await using var blte = new BLTE.BLTEStream(ms, default);
-                        using var fso = new MemoryStream();
-                        await blte.CopyToAsync(fso);
-                        data = fso.ToArray();
-                    }
                 }
                 catch (CASInstaller.BLTE.BLTEDecoderException be)
                 {
@@ -244,6 +253,13 @@ public class Game(string product, string branch = "us")
             }
             
             if (data == null) continue;
+            
+            // Decode BLTE, install files must be extracted
+            using var ms = new MemoryStream(data);
+            await using var blte = new BLTE.BLTEStream(ms, default);
+            using var fso = new MemoryStream();
+            await blte.CopyToAsync(fso);
+            data = fso.ToArray();
             
             var dirPath = Path.GetDirectoryName(filePath) ?? "";
             if (!Directory.Exists(dirPath))
@@ -320,13 +336,7 @@ public class Game(string product, string branch = "us")
                 data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
 
             if (data == null) continue;
-
-            using var ms = new MemoryStream(data);
-            await using var blte = new BLTE.BLTEStream(ms, default);
-            using var fso = new MemoryStream();
-            await blte.CopyToAsync(fso);
-            data = fso.ToArray();
-
+            
             return data;
         }
         
@@ -347,18 +357,6 @@ public class Game(string product, string branch = "us")
         // Add locale tags
         tags.Add("enUS");
 
-        var dataDir = Path.Combine(data_dir ?? "", "data");
-        if (!Directory.Exists(dataDir))
-            Directory.CreateDirectory(dataDir);
-        const byte idxN = 1;        // Only need to increase this number if we update the game
-        var idxMap = new Dictionary<byte, IDX>();
-        for (var i = 0; i < 16; i++)
-        {
-            var bucket = (byte)i;
-            var path = Path.Combine(dataDir, $"{bucket:X2}000000{idxN:X2}.idx");
-            idxMap.Add(bucket, new IDX(path, bucket));
-        }
-        
         ulong totalDownloadSize = 0;
 
         var tagFilteredEntries = new List<DownloadManifest.DownloadEntry>();
@@ -399,24 +397,7 @@ public class Game(string product, string branch = "us")
                 task1.Increment(1);
                 if (downloadEntry.priority is 0 or 1)
                 {
-                    totalDownloadSize += downloadEntry.size;
-                    var bucket = cascGetBucketIndex(downloadEntry.eKey);
-
-                    if (idxMap.TryGetValue(bucket, out var idx))
-                    {
-                        if (Working_Offset + (int)downloadEntry.size + 30 > DATA_TOTAL_SIZE_MAXIMUM)
-                        {
-                            Working_Offset = DATA_OFFSET_START;
-                            Working_Stream?.Close();
-                            Working_Stream = null;
-
-                            Working_Data++;
-                        }
-
-                        var idxEntry = idx.Add(downloadEntry.eKey, Working_Data, Working_Offset, downloadEntry.size);
-                        await WriteDataEntry(idxEntry, cdn, cdnConfig, archiveGroup, dataDir);
-                        Working_Offset += (int)downloadEntry.size + 30;
-                    }
+                    await DownloadAndWriteFile(downloadEntry.eKey, cdn, cdnConfig, archiveGroup, downloadEntry.size);
                 }
             }
         });
@@ -431,19 +412,68 @@ public class Game(string product, string branch = "us")
         }
     }
 
-    private async Task WriteDataEntry(IDX.Entry idxEntry, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, string dataDir)
+    private void BuildIDXMap(string dataDir)
     {
-        if (Working_Stream == null)
+        const byte idxN = 1;        // Only need to increase this number if we update the game
+        idxMap = new Dictionary<byte, IDX>();
+        for (var i = 0; i < 16; i++)
         {
-            var dataPath = Path.Combine(dataDir, $"data.{Working_Data:D3}");
-            Working_Stream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+            var bucket = (byte)i;
+            var path = Path.Combine(dataDir, $"{bucket:X2}000000{idxN:X2}.idx");
+            idxMap.Add(bucket, new IDX(path, bucket));
         }
+    }
 
-        using (var bw = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true))  // Keep the stream open after disposing the writer
+    private async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size)
+    {
+        size += 30;
+        var bucket = cascGetBucketIndex(eKey);
+
+        if (idxMap.TryGetValue(bucket, out var idx))
         {
-            casReconstructionHeaderSerialize(bw, Working_Data, Working_Offset);  // Write the initial header
-        }
+            if (Working_Stream == null)
+                Working_Stream = new MemoryStream();
+            
+            if (Working_Offset + (int)size > DATA_TOTAL_SIZE_MAXIMUM)
+            {
+                await DataFileComplete(idxMap);
 
+                Working_Offset = DATA_OFFSET_START;
+
+                Working_Data++;
+            }
+
+            var idxEntry = idx.Add(eKey, Working_Data, Working_Offset, size);
+            
+            if (Working_Stream.Length == 0)
+            {
+                // Switched data file
+                //await using var bw = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true);
+                //casReconstructionHeaderSerialize(bw, idx, Working_Data);  // Write the initial header
+            }
+            
+            await WriteDataEntry(idxEntry, cdn, cdnConfig, archiveGroup);
+            Working_Offset += (int)size;
+        }
+    }
+
+    private async Task DataFileComplete(Dictionary<byte, IDX> idxMap)
+    {
+        await using var bw = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        foreach (var (_, idx) in idxMap)
+        {
+            casReconstructionHeaderSerialize(bw, idx, Working_Data);  // Write the initial header
+        }
+                
+        var dataPath = Path.Combine(gameDataDir, $"data.{Working_Data:D3}");
+        var fileStream = File.Create(dataPath);
+        Working_Stream.WriteTo(fileStream);
+        fileStream.Close();
+        Working_Stream.SetLength(0);
+    }
+
+    private async Task WriteDataEntry(IDX.Entry idxEntry, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup)
+    {
         var offset = idxEntry.Offset;
         var key = idxEntry.Key;
         var archiveID = idxEntry.ArchiveID;
@@ -464,26 +494,23 @@ public class Game(string product, string branch = "us")
         }
         else
         {
-            // Only for install I assume
             data = await DownloadFileDirectly(key, cdn);
         }
 
         if (data == null) return;
 
         // Ensure we're not overwriting stream position by reusing the BinaryWriter
-        using (var bws = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true))
+        await using var bws = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        var header = new casReconstructionHeader()
         {
-            var header = new casReconstructionHeader()
-            {
-                BLTEHash = key.Key.Reverse().ToArray(),
-                size = idxEntry.Size + 30,
-                channel = casIndexChannel.Data,
-            };
+            BLTEHash = key.Key.Reverse().ToArray(),
+            size = idxEntry.Size,
+            channel = casIndexChannel.Data,
+        };
         
-            bws.Seek(offset, SeekOrigin.Begin);
-            header.Write(bws, (ushort)archiveID, (uint)offset);
-            bws.Write(data);
-        }
+        bws.Seek(offset, SeekOrigin.Begin);
+        header.Write(bws, (ushort)archiveID, (uint)offset);
+        bws.Write(data);
     }
 
     enum casIndexChannel : byte
@@ -525,10 +552,8 @@ public class Game(string product, string branch = "us")
         }
     }
     
-    private void casReconstructionHeaderSerialize(BinaryWriter bw, int dataNumber, int dataOffset)
+    private void casReconstructionHeaderSerialize(BinaryWriter bw, IDX idx, int dataNumber)
     {
-        //byte[] indices = [12, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13];
-        
         var container = new CasContainerIndex()
         {
             BaseDir = "World of Warcraft",
@@ -536,17 +561,16 @@ public class Game(string product, string branch = "us")
             MaxSize = 30
         };
 
+        var (Result, SegmentHeaderKeys, ShortSegmentHeaderKeys) = container.GenerateSegmentHeaderKeys((uint)dataNumber);
+        
         for (var i = 0; i < 16; i++)
         {
-            var (Result, SegmentHeaderKeys, ShortSegmentHeaderKeys) = container.GenerateSegmentHeaderKeys(0);
-            //var BLTEHash = new byte[16];
-            //Array.Copy(reconstruction_hash, 0, BLTEHash, 0, 14);  // Copy the first 14 bytes
-            //BLTEHash[14] = (byte)dataNumber;  // Set the dataNumber at index 14
-            //BLTEHash[15] = indices[i];  // Set the indexNumber at index 15
+            var reversedSegmentHeaderKey = SegmentHeaderKeys[i].Reverse().ToArray();
+            var idxEntry = idx.Add(new Hash(SegmentHeaderKeys[i]), Working_Data, i * 30, 30);
             
             var header = new casReconstructionHeader()
             {
-                BLTEHash = SegmentHeaderKeys[i].Reverse().ToArray(),
+                BLTEHash = reversedSegmentHeaderKey,
                 size = 30,
                 channel = casIndexChannel.Meta,
             };

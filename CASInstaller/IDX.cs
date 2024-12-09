@@ -214,8 +214,15 @@ public class IDX
         public void Write(BinaryWriter bw)
         {
             bw.Write(Key.Key, 0, 9);
-            bw.Write((byte)((ArchiveID >> 2) & 0xFF));
-            bw.Write((ArchiveID << 30) | Offset);
+
+            // Reconstruct the indexHigh and indexLow values
+            byte indexHigh = (byte)(ArchiveID >> 2);
+            int indexLow = ((ArchiveID & 0x03) << 30) | (Offset & 0x3FFFFFFF);
+
+            // Write the values in Big Endian format
+            bw.Write(indexHigh);        // Write the high byte
+            bw.WriteInt32BE(indexLow); // Write the 4-byte integer in Big Endian
+            
             bw.Write(Size);
         }
     }

@@ -5,12 +5,12 @@ namespace CASInstaller;
 
 public struct BuildConfig
 {
-    public string Root;
+    public Hash Root;
     public Hash[] Download;
     public Hash[] Install;
     public Hash[] Encoding;
     public string[] EncodingSize;
-    public string[] Size;
+    public Hash[] Size;
     public string[] SizeSize;
     public string BuildName;
     public string BuildPlaybuildInstaller;
@@ -56,7 +56,7 @@ public struct BuildConfig
             switch (cols[0])
             {
                 case "root":
-                    Root = cols[1];
+                    Root = new Hash(cols[1]);
                     break;
                 case "download":
                     var downloadEntries = cols[1].Split(' ');
@@ -86,7 +86,12 @@ public struct BuildConfig
                     EncodingSize = cols[1].Split(' ');
                     break;
                 case "size":
-                    Size = cols[1].Split(' ');
+                    var sizeEntries = cols[1].Split(' ');
+                    Size = new Hash[sizeEntries.Length];
+                    for (var i = 0; i < sizeEntries.Length; i++)
+                    {
+                        Size[i] = new Hash(sizeEntries[i]);
+                    }
                     break;
                 case "size-size":
                     SizeSize = cols[1].Split(' ');
