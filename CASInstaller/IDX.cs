@@ -7,7 +7,7 @@ public class IDX
     private const byte EXTRA_BYTES = 0;
     public const long ARCHIVE_TOTAL_SIZE_MAXIMUM = 1098437885952;
     public readonly string Path;
-    private readonly List<Entry> Data;
+    private readonly List<Entry> m_sortedRecords;
 
     public int HeaderHashSize { get; set; } = HEADER_HASH_SIZE;
     public uint HeaderHash { get; set; }
@@ -23,13 +23,13 @@ public class IDX
     {
         Path = path;
         Bucket = bucket;
-        Data = [];
+        m_sortedRecords = [];
     }
     
     public Entry Add(Hash key, int archiveId, int offset, ulong size)
     {
         var entry = new Entry(key, archiveId, offset, (uint)size);
-        Data.Add(entry);
+        m_sortedRecords.Add(entry);
         return entry;
     }
     
@@ -62,7 +62,7 @@ public class IDX
         bw.BaseStream.Position += 8;    // Padding
         
         // Build entries
-        EntriesSize = Data.Count * (Spec.Size + Spec.Offset + Spec.Key);
+        EntriesSize = m_sortedRecords.Count * (Spec.Size + Spec.Offset + Spec.Key);
         byte[]? entryBytes = null;
         if (EntriesSize == 0)
         {
@@ -70,19 +70,26 @@ public class IDX
         }
         else
         {
+            uint epc = 0;
+            uint epb = 0;
             using var entriesMs = new MemoryStream();
             using var entriesBw = new BinaryWriter(entriesMs);
-            foreach (var entry in Data)
+            foreach (var entry in m_sortedRecords)
             {
-                entry.Write(entriesBw);
-            }
+                using var entryMS = new MemoryStream();
+                using var entryBW = new BinaryWriter(entryMS);
+                entry.Write(entryBW);
+                entryBW.Flush(); // Ensure all data is written to the MemoryStream
+                entryMS.Position = 0; // Reset the stream position for hashing
+                entryBytes = entryMS.ToArray();
 
+                entriesBw.Write(entryBytes);
+                
+                HashAlgo.HashLittle2(entryBytes, entryBytes.Length, ref epc, ref epb);
+            }
             entriesBw.Flush(); // Ensure all data is written to the MemoryStream
             entriesMs.Position = 0; // Reset the stream position for hashing
             entryBytes = entriesMs.ToArray();
-            uint epc = 0;
-            uint epb = 0;
-            HashAlgo.HashLittle2(entryBytes, entryBytes.Length, ref epc, ref epb);
             EntriesHash = epc;
         }
 
@@ -92,8 +99,8 @@ public class IDX
         if (entryBytes != null)
             bw.Write(entryBytes);
         
-        // Pad to 65536 bytes
-        var paddingSize = 65536 - fs.Length;
+        // Pad to 196608 bytes
+        var paddingSize = 196608 - fs.Length;
         if (paddingSize > 0)
         {
             var padding = new byte[paddingSize];
@@ -129,7 +136,7 @@ public class IDX
         for (var i = 0; i < entryCount; i++)
         {
             var info = new Entry(br);
-            Data.Add(info);
+            m_sortedRecords.Add(info);
         }
     }
 
@@ -175,14 +182,14 @@ public class IDX
     
     public class Entry
     {
-        private readonly Hash key;
-        private readonly int ArchiveID;
-        private readonly int Offset;
-        private readonly uint Size;
+        public readonly Hash Key;
+        public readonly int ArchiveID;
+        public readonly int Offset;
+        public readonly uint Size;
 
         public Entry(Hash key, int archiveId, int offset, uint size)
         {
-            this.key = key;
+            this.Key = key;
             ArchiveID = archiveId;
             Offset = offset;
             Size = size;
@@ -206,7 +213,7 @@ public class IDX
         
         public void Write(BinaryWriter bw)
         {
-            bw.Write(key.Key, 0, 9);
+            bw.Write(Key.Key, 0, 9);
             bw.Write((byte)((ArchiveID >> 2) & 0xFF));
             bw.Write((ArchiveID << 30) | Offset);
             bw.Write(Size);

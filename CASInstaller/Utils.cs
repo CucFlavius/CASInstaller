@@ -1,4 +1,5 @@
-﻿using Spectre.Console;
+﻿using System.Net.Http.Headers;
+using Spectre.Console;
 
 namespace CASInstaller;
 
@@ -11,6 +12,30 @@ public static class Utils
         try
         {
             data = await client.GetByteArrayAsync(url);
+        }
+        catch (HttpRequestException re)
+        {
+            AnsiConsole.MarkupLine($"[bold red]Download Failed:[/] {url}");
+        }
+        catch (Exception e)
+        {
+            AnsiConsole.MarkupLine($"[bold red]Download Failed:[/] {url}");
+            AnsiConsole.WriteException(e);
+            throw;
+        }
+        return data;
+    }
+    
+    public static async Task<byte[]?> GetDataFromURL(string url, int start, int size)
+    {
+        byte[]? data = null;
+        var client = new HttpClient();
+        try
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Range = new RangeHeaderValue(start, start + size - 1);
+            var response = await client.SendAsync(request);
+            data = await response.Content.ReadAsByteArrayAsync();
         }
         catch (HttpRequestException re)
         {

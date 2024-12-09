@@ -160,8 +160,5 @@ public class HashAlgo
     }
 
     // Helper function to perform a left rotation.
-    private static uint Rot(uint x, int k)
-    {
-        return (x << k) | (x >> (32 - k));
-    }
+    static uint Rot(uint x, int k) => (x << k) | (x >> (32 - k));
 }

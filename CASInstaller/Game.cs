@@ -38,6 +38,9 @@ public class Game(string product, string branch = "us")
     
     public async Task Install(string installPath)
     {
+        TestGenerateSegmentHeaderKeys();
+        return;
+        
         if (!Directory.Exists(cache_dir))
             Directory.CreateDirectory(cache_dir);
         
@@ -80,7 +83,7 @@ public class Game(string product, string branch = "us")
         var downloadEncodedHash = _buildConfig?.Download[1];
         _download = await DownloadManifest.GetDownload(_cdn, downloadEncodedHash);
         _download?.LogInfo();
-        await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _data_dir);
+        await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags, _data_dir);
 
         var installContentHash = _buildConfig?.Install[0];
         var installEncodedHash = _buildConfig?.Install[1];
@@ -255,46 +258,45 @@ public class Game(string product, string branch = "us")
         var hosts = cdn?.Hosts;
         if (hosts == null) return null;
         var archive = cdnConfig?.Archives?[indexEntry.archiveIndex];
-        if (archive != null)
+        if (archive == null) return null;
+        
+        foreach (var cdnURL in hosts)
         {
-            foreach (var cdnURL in hosts)
+            var url = $@"http://{cdnURL}/{cdn?.Path}/data/{archive.Value.UrlString}";
+            var dataFilePath = Path.Combine(cache_dir, archive.Value.KeyString);
+            if (File.Exists(dataFilePath))
             {
-                var url = $@"http://{cdnURL}/{cdn?.Path}/data/{archive.Value.UrlString}";
-                var dataFilePath = Path.Combine(cache_dir, archive.Value.KeyString);
-                if (File.Exists(dataFilePath))
-                {
-                    await using var str = File.OpenRead(dataFilePath);
-                    var data = new byte[indexEntry.size];
-                    str.Seek(indexEntry.offset, SeekOrigin.Begin);
-                    await str.ReadExactlyAsync(data, 0, (int)indexEntry.size);
-                    return data;
-                }
+                await using var str = File.OpenRead(dataFilePath);
+                var data = new byte[indexEntry.size];
+                str.Seek(indexEntry.offset, SeekOrigin.Begin);
+                await str.ReadExactlyAsync(data, 0, (int)indexEntry.size);
+                return data;
+            }
+            else
+            {
+                var encryptedData = await Utils.GetDataFromURL(url);
+                if (encryptedData == null)
+                    continue;
+
+                byte[]? decryptedData;
+                if (ArmadilloCrypt.Instance == null)
+                    decryptedData = encryptedData;
                 else
-                {
-                    var encryptedData = await Utils.GetDataFromURL(url);
-                    if (encryptedData == null)
-                        continue;
+                    decryptedData = ArmadilloCrypt.Instance?.DecryptData(archive.Value, encryptedData);
 
-                    byte[]? decryptedData;
-                    if (ArmadilloCrypt.Instance == null)
-                        decryptedData = encryptedData;
-                    else
-                        decryptedData = ArmadilloCrypt.Instance?.DecryptData(archive.Value, encryptedData);
+                if (decryptedData == null) continue;
 
-                    if (decryptedData == null) continue;
-
-                    // Cache
-                    await File.WriteAllBytesAsync(dataFilePath, decryptedData);
+                // Cache
+                await File.WriteAllBytesAsync(dataFilePath, decryptedData);
                     
-                    using var str = new MemoryStream(decryptedData);
-                    var data = new byte[indexEntry.size];
-                    str.Seek(indexEntry.offset, SeekOrigin.Begin);
-                    await str.ReadExactlyAsync(data, 0, (int)indexEntry.size);
-                    return data;
-                }
+                using var str = new MemoryStream(decryptedData);
+                var data = new byte[indexEntry.size];
+                str.Seek(indexEntry.offset, SeekOrigin.Begin);
+                await str.ReadExactlyAsync(data, 0, (int)indexEntry.size);
+                return data;
             }
         }
-        
+
         return null;
     }
     
@@ -333,7 +335,8 @@ public class Game(string product, string branch = "us")
     
     private async Task ProcessDownload(
         DownloadManifest? download, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
-        ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags,
+        ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup,
+        ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? patchGroup, List<string>? tags,
         string? data_dir, bool overrideFiles = false)
     {
         if (download == null)
@@ -384,34 +387,39 @@ public class Game(string product, string branch = "us")
             if (checksOut)
                 tagFilteredEntries.Add(entry);
         }
-        
-        foreach (var downloadEntry in tagFilteredEntries)
-        {
-            if (downloadEntry.priority is 0 or 1)
-            {
-                totalDownloadSize += downloadEntry.size;
-                var bucket = cascGetBucketIndex(downloadEntry.eKey);
 
-                if (idxMap.TryGetValue(bucket, out var idx))
+        await AnsiConsole.Progress().StartAsync(async ctx =>
+        {
+            var length = tagFilteredEntries?.Count ?? 0;
+            var task1 = ctx.AddTask($"[green]Processing {length} download entries[/]");
+            task1.MaxValue = length;
+
+            foreach (var downloadEntry in tagFilteredEntries)
+            {
+                task1.Increment(1);
+                if (downloadEntry.priority is 0 or 1)
                 {
-                    if (Working_Offset + (int)downloadEntry.size > DATA_TOTAL_SIZE_MAXIMUM)
+                    totalDownloadSize += downloadEntry.size;
+                    var bucket = cascGetBucketIndex(downloadEntry.eKey);
+
+                    if (idxMap.TryGetValue(bucket, out var idx))
                     {
-                        Working_Offset = DATA_OFFSET_START;
-                        if (Working_Stream != null)
+                        if (Working_Offset + (int)downloadEntry.size + 30 > DATA_TOTAL_SIZE_MAXIMUM)
                         {
+                            Working_Offset = DATA_OFFSET_START;
                             Working_Stream?.Close();
                             Working_Stream = null;
+
+                            Working_Data++;
                         }
 
-                        Working_Data++;
+                        var idxEntry = idx.Add(downloadEntry.eKey, Working_Data, Working_Offset, downloadEntry.size);
+                        await WriteDataEntry(idxEntry, cdn, cdnConfig, archiveGroup, dataDir);
+                        Working_Offset += (int)downloadEntry.size + 30;
                     }
-                    var idxEntry = idx.Add(downloadEntry.eKey, Working_Data, Working_Offset, downloadEntry.size);
-                    Working_Offset += (int)downloadEntry.size;
-                    
-                    WriteDataEntry(idxEntry, downloadEntry, cdn, cdnConfig, encoding, archiveGroup, dataDir);
                 }
             }
-        }
+        });
         AnsiConsole.MarkupLine($"[bold green]Total download size: {totalDownloadSize}[/]");
 
         foreach (var (key, idx) in idxMap)
@@ -423,14 +431,58 @@ public class Game(string product, string branch = "us")
         }
     }
 
-    private void WriteDataEntry(IDX.Entry idxEntry, DownloadManifest.DownloadEntry downloadEntry, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, string dataDir)
+    private async Task WriteDataEntry(IDX.Entry idxEntry, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, string dataDir)
     {
         if (Working_Stream == null)
         {
             var dataPath = Path.Combine(dataDir, $"data.{Working_Data:D3}");
             Working_Stream = new FileStream(dataPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-            using var bw = new BinaryWriter(Working_Stream);
-            casReconstructionHeaderSerialize(bw, Working_Data, Working_Offset);
+        }
+
+        using (var bw = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true))  // Keep the stream open after disposing the writer
+        {
+            casReconstructionHeaderSerialize(bw, Working_Data, Working_Offset);  // Write the initial header
+        }
+
+        var offset = idxEntry.Offset;
+        var key = idxEntry.Key;
+        var archiveID = idxEntry.ArchiveID;
+
+        byte[]? data = null;
+
+        if (archiveGroup != null && archiveGroup.TryGetValue(key, out var indexEntry))
+        {
+            try
+            {
+                data = await DownloadFileFromIndex(indexEntry, cdn, cdnConfig);
+            }
+            catch (Exception e)
+            {
+                AnsiConsole.WriteException(e);
+                throw;
+            }
+        }
+        else
+        {
+            // Only for install I assume
+            data = await DownloadFileDirectly(key, cdn);
+        }
+
+        if (data == null) return;
+
+        // Ensure we're not overwriting stream position by reusing the BinaryWriter
+        using (var bws = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            var header = new casReconstructionHeader()
+            {
+                BLTEHash = key.Key.Reverse().ToArray(),
+                size = idxEntry.Size + 30,
+                channel = casIndexChannel.Data,
+            };
+        
+            bws.Seek(offset, SeekOrigin.Begin);
+            header.Write(bws, (ushort)archiveID, (uint)offset);
+            bws.Write(data);
         }
     }
 
@@ -440,7 +492,7 @@ public class Game(string product, string branch = "us")
         Meta = 0x1,
     }
     
-    struct DataHeader
+    struct casReconstructionHeader
     {
         public byte[] BLTEHash;
         public uint size;
@@ -475,17 +527,26 @@ public class Game(string product, string branch = "us")
     
     private void casReconstructionHeaderSerialize(BinaryWriter bw, int dataNumber, int dataOffset)
     {
-        byte[] indices = [12, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13];
+        //byte[] indices = [12, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13];
+        
+        var container = new CasContainerIndex()
+        {
+            BaseDir = "World of Warcraft",
+            BindMode = true,
+            MaxSize = 30
+        };
+
         for (var i = 0; i < 16; i++)
         {
-            var BLTEHash = new byte[16];
-            Array.Copy(reconstruction_hash, 0, BLTEHash, 0, 14);  // Copy the first 14 bytes
-            BLTEHash[14] = (byte)dataNumber;  // Set the dataNumber at index 14
-            BLTEHash[15] = indices[i];  // Set the indexNumber at index 15
+            var (Result, SegmentHeaderKeys, ShortSegmentHeaderKeys) = container.GenerateSegmentHeaderKeys(0);
+            //var BLTEHash = new byte[16];
+            //Array.Copy(reconstruction_hash, 0, BLTEHash, 0, 14);  // Copy the first 14 bytes
+            //BLTEHash[14] = (byte)dataNumber;  // Set the dataNumber at index 14
+            //BLTEHash[15] = indices[i];  // Set the indexNumber at index 15
             
-            var header = new DataHeader()
+            var header = new casReconstructionHeader()
             {
-                BLTEHash = BLTEHash,
+                BLTEHash = SegmentHeaderKeys[i].Reverse().ToArray(),
                 size = 30,
                 channel = casIndexChannel.Meta,
             };
@@ -669,21 +730,53 @@ public class Game(string product, string branch = "us")
         await ProcessInstall(launcher_install, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
         var launcher_download = await DownloadManifest.GetDownload(launcher_cdn, launcher_buildConfig.Download[1]);
         launcher_download.LogInfo();
-        await ProcessDownload(launcher_download, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, data_dir);
+        await ProcessDownload(launcher_download, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, null, tags, data_dir);
         File.SetAttributes(data_dir, FileAttributes.Hidden);
     }
 
     private void TestGenerateSegmentHeaderKeys()
     {
-        CasContainerIndex casContainerIndex = new CasContainerIndex("World of Warcraft", 32, CasDynamicOpenMode.Reconstruction);
-        var shortSegmentKeys = new CasContainerIndex.CasIndexKey[16];
-        var keys = new CasContainerIndex.CasKey[16];
-        casContainerIndex.GenerateSegmentHeaderKeys(0, shortSegmentKeys, keys);
+        /*
+        using var headerMs = new MemoryStream();
+        using var headerBw = new BinaryWriter(headerMs);
+        headerBw.Write(new byte[] {0x58, 0xEA, 0xCB, 0x4A, 0x76, 0x57, 0xDF, 0x28, 0x78, 0xD2, 0xAE, 0x15, 0x21, 0x00, 0x00, 0x06});
+        headerBw.Write(30);
+        headerBw.Write((byte)1);
+        headerBw.Write((byte)0);
 
-        foreach (var key in shortSegmentKeys)
+        headerBw.Flush();
+        headerMs.Position = 0;
+        var checksumA = HashAlgo.HashLittle(headerMs.ToArray(), 0x16, 0x3D6BE971);
+        headerMs.Position = 0x16;
+        headerBw.Write(checksumA);
+            
+        headerBw.Flush();
+        headerMs.Position = 0;
+        var checksumB = HashAlgo.CalculateChecksum(headerMs.ToArray(), 0, 0);
+        
+        AnsiConsole.WriteLine(checksumA + " " + checksumB);
+        */
+        //CasContainerIndex casContainerIndex = new CasContainerIndex("World of Warcraft", 30, CasDynamicOpenMode.Reconstruction);
+        //casContainerIndex.GenerateSegmentHeaderKeys(1, out var shortSegmentKeys, out var keys);
+
+        //foreach (var key in keys)
+        //{
+        //    var reversed = key.Data.Reverse().ToArray();
+        //    AnsiConsole.WriteLine(reversed.ToHexString());
+        //}
+        
+        CasContainerIndex container = new CasContainerIndex()
         {
-            var reversed = key.Data.Reverse().ToArray();
+            BaseDir = "D:\\Games\\World of Warcraft\\Data\\",
+            BindMode = true,
+            MaxSize = 30
+        };
+        (CasContainerIndex.CasResult Result, byte[][] SegmentHeaderKeys, byte[][] ShortSegmentHeaderKeys) = container.GenerateSegmentHeaderKeys(0);
+        foreach (var key in SegmentHeaderKeys)
+        {
+            var reversed = key.Reverse().ToArray();
             AnsiConsole.WriteLine(reversed.ToHexString());
         }
+        
     }
 }

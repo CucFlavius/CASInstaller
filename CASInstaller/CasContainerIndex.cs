@@ -1,14 +1,118 @@
 ﻿using System.Security.Cryptography;
 using System.Text;
-
-public enum CasDynamicOpenMode
-{
-    Reconstruction,
-    Other
-}
+using Spectre.Console;
 
 public class CasContainerIndex
 {
+    public enum CasResult
+    {
+        Success = 0,
+        InvalidContainerSize = 1,
+        ReconstructionModeError = 8
+    }
+    
+    public string BaseDir { get; set; }
+    public ulong MaxSize { get; set; }
+    public bool BindMode { get; set; } // Assuming a boolean for simplicity; adapt as needed.
+
+    public (CasResult Result, byte[][] SegmentHeaderKeys, byte[][] ShortSegmentHeaderKeys) GenerateSegmentHeaderKeys(
+        uint segmentIndex)
+    {
+        if (MaxSize >> 30 > 0x3FF)
+        {
+            Console.Error.WriteLine($"Invalid maximum container size '{MaxSize}' detected.");
+            return (BindMode ? CasResult.ReconstructionModeError : CasResult.InvalidContainerSize, null, null);
+        }
+
+        string baseDirPath = BaseDir ?? string.Empty;
+
+        // Generate base key
+        byte[] baseKey = new byte[16];
+        GetLocationHash(baseKey, baseDirPath);
+
+        byte[][] segmentHeaderKeys = new byte[16][];
+        byte[][] shortSegmentHeaderKeys = new byte[16][];
+
+        // Compute segment header keys
+        for (int i = 0; i < 16; i++)
+        {
+            byte[] segmentKey = new byte[16];
+            Array.Copy(baseKey, segmentKey, 16);
+            segmentKey[1] = (byte)segmentIndex;
+
+            if (MaxSize >> 30 > 0x100)
+            {
+                segmentKey[2] = (byte)(segmentIndex >> 8);
+            }
+
+            segmentKey[0] = 0;
+
+            for (byte j = 0; j < 0xFF; j++)
+            {
+                segmentKey[0] = j;
+                int checksum = j;
+                for (int k = 1; k < 9; k++)
+                {
+                    checksum ^= segmentKey[k];
+                }
+
+                if (((checksum ^ (checksum >> 4)) + 1 & 0xF) == i)
+                {
+                    break;
+                }
+            }
+
+            segmentHeaderKeys[i] = segmentKey;
+        }
+
+        // Copy short keys
+        for (int i = 0; i < 16; i++)
+        {
+            shortSegmentHeaderKeys[i] = new byte[9];
+            Array.Copy(segmentHeaderKeys[i], shortSegmentHeaderKeys[i], 9);
+        }
+
+        return (CasResult.Success, segmentHeaderKeys, shortSegmentHeaderKeys);
+    }
+    
+    public static void GetLocationHash(byte[] hash, string baseDirPath)
+    {
+        if (hash == null || hash.Length != 16)
+        {
+            throw new ArgumentException("Hash array must be 16 bytes.", nameof(hash));
+        }
+
+        // Use an empty string if baseDirPath is null
+        baseDirPath ??= string.Empty;
+
+        // Retrieve the computer name
+        string machineName = Environment.MachineName;
+
+        // Create an MD5 hash instance
+        using (var md5 = MD5.Create())
+        {
+            // Hash the machine name
+            md5.TransformBlock(Encoding.UTF8.GetBytes(machineName), 0, machineName.Length, null, 0);
+
+            // Hash the base directory path
+            byte[] baseDirBytes = Encoding.UTF8.GetBytes(baseDirPath);
+            md5.TransformFinalBlock(baseDirBytes, 0, baseDirBytes.Length);
+
+            // Get the resulting hash
+            Buffer.BlockCopy(md5.Hash, 0, hash, 0, 16);
+        }
+    }
+}
+
+/*
+public class CasContainerIndex
+{
+    public enum CasDynamicOpenMode
+    {
+        Reconstruction,
+        Other
+    }
+
     private uint _maxSize;
     private CasDynamicOpenMode _bindMode;
     private string _baseDir;
@@ -40,17 +144,16 @@ public class CasContainerIndex
         }
     }
 
-    public int GenerateSegmentHeaderKeys(uint segmentIndex, CasIndexKey[] shortSegmentHeaderKeys, CasKey[] segmentHeaderKeys)
+    public int GenerateSegmentHeaderKeys(uint segmentIndex, out CasIndexKey[] shortSegmentHeaderKeys, out CasKey[] segmentHeaderKeys)
     {
-        if (shortSegmentHeaderKeys == null || segmentHeaderKeys == null)
-            throw new ArgumentNullException("Key arrays cannot be null.");
-
         // Ensure all keys are initialized
+        shortSegmentHeaderKeys = new CasIndexKey[16];
         for (int i = 0; i < shortSegmentHeaderKeys.Length; i++)
         {
             shortSegmentHeaderKeys[i] = new CasIndexKey();
         }
 
+        segmentHeaderKeys = new CasKey[16];
         for (int i = 0; i < segmentHeaderKeys.Length; i++)
         {
             segmentHeaderKeys[i] = new CasKey();
@@ -110,13 +213,15 @@ public class CasContainerIndex
         Console.WriteLine("Error: " + message);
     }
 
-    private void CasIndexGetLocationHash(byte[] hash, string? path)
+    public void CasIndexGetLocationHash(byte[] hash, string? path)
     {
         if (hash.Length != 16)
             throw new ArgumentException("Hash must be 16 bytes.", nameof(hash));
 
         path ??= string.Empty;
         string machineName = Environment.MachineName;
+        AnsiConsole.WriteLine($"Hostname: {machineName}");
+        AnsiConsole.WriteLine($"BaseDir: {path}");
 
         using (var md5 = MD5.Create())
         {
@@ -131,3 +236,4 @@ public class CasContainerIndex
         }
     }
 }
+*/
