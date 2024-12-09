@@ -99,8 +99,6 @@ public class Game(string product, string branch = "us")
         
         BuildIDXMap(gameDataDir);
         
-        //if (_encoding!.contentEntries.TryGetValue((Hash)_buildConfig?.Root!, out var rootEncodingEntry))
-        //    await DownloadAndWriteFile((Hash)_buildConfig?.Root!, _cdn, _cdnConfig, _archiveGroup, rootEncodingEntry.size);
         await DownloadAndWriteFile((Hash)downloadEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.DownloadSize[1]!));
         await DownloadAndWriteFile((Hash)installEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.InstallSize[1]!));
         await DownloadAndWriteFile((Hash)encodingEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.EncodingSize[1]!));
@@ -109,7 +107,7 @@ public class Game(string product, string branch = "us")
         await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags, _data_dir);
         await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
 
-        await DataFileComplete(idxMap);
+        await DataFileComplete();
         
         WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
         WritePatchResult(_game_dir);
@@ -279,18 +277,14 @@ public class Game(string product, string branch = "us")
         foreach (var cdnURL in hosts)
         {
             var url = $@"http://{cdnURL}/{cdn?.Path}/data/{archive.Value.UrlString}";
-            var dataFilePath = Path.Combine(cache_dir, archive.Value.KeyString);
+            var dataFilePath = Path.Combine(cache_dir, $"{archive.Value.KeyString!}_{indexEntry.offset}_{indexEntry.size}.data");
             if (File.Exists(dataFilePath))
             {
-                await using var str = File.OpenRead(dataFilePath);
-                var data = new byte[indexEntry.size];
-                str.Seek(indexEntry.offset, SeekOrigin.Begin);
-                await str.ReadExactlyAsync(data, 0, (int)indexEntry.size);
-                return data;
+                return await File.ReadAllBytesAsync(dataFilePath);
             }
             else
             {
-                var encryptedData = await Utils.GetDataFromURL(url);
+                var encryptedData = await Utils.GetDataFromURL(url, (int)indexEntry.offset, (int)indexEntry.size);
                 if (encryptedData == null)
                     continue;
 
@@ -304,12 +298,8 @@ public class Game(string product, string branch = "us")
 
                 // Cache
                 await File.WriteAllBytesAsync(dataFilePath, decryptedData);
-                    
-                using var str = new MemoryStream(decryptedData);
-                var data = new byte[indexEntry.size];
-                str.Seek(indexEntry.offset, SeekOrigin.Begin);
-                await str.ReadExactlyAsync(data, 0, (int)indexEntry.size);
-                return data;
+                
+                return decryptedData;
             }
         }
 
@@ -391,7 +381,7 @@ public class Game(string product, string branch = "us")
             var length = tagFilteredEntries?.Count ?? 0;
             var task1 = ctx.AddTask($"[green]Processing {length} download entries[/]");
             task1.MaxValue = length;
-
+            
             foreach (var downloadEntry in tagFilteredEntries)
             {
                 task1.Increment(1);
@@ -426,7 +416,7 @@ public class Game(string product, string branch = "us")
 
     private async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size)
     {
-        size += 30;
+        var writeSize = size + 30;
         var bucket = cascGetBucketIndex(eKey);
 
         if (idxMap.TryGetValue(bucket, out var idx))
@@ -434,42 +424,38 @@ public class Game(string product, string branch = "us")
             if (Working_Stream == null)
                 Working_Stream = new MemoryStream();
             
-            if (Working_Offset + (int)size > DATA_TOTAL_SIZE_MAXIMUM)
+            if (Working_Offset + (int)writeSize > DATA_TOTAL_SIZE_MAXIMUM)
             {
-                await DataFileComplete(idxMap);
+                await DataFileComplete();
 
                 Working_Offset = DATA_OFFSET_START;
 
                 Working_Data++;
             }
 
-            var idxEntry = idx.Add(eKey, Working_Data, Working_Offset, size);
-            
-            if (Working_Stream.Length == 0)
-            {
-                // Switched data file
-                //await using var bw = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true);
-                //casReconstructionHeaderSerialize(bw, idx, Working_Data);  // Write the initial header
-            }
+            var idxEntry = idx.Add(eKey, Working_Data, Working_Offset, writeSize);
             
             await WriteDataEntry(idxEntry, cdn, cdnConfig, archiveGroup);
-            Working_Offset += (int)size;
+            Working_Offset += (int)writeSize;
         }
     }
 
-    private async Task DataFileComplete(Dictionary<byte, IDX> idxMap)
+    private async Task DataFileComplete()
     {
-        await using var bw = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        foreach (var (_, idx) in idxMap)
+        if (Working_Stream != null)
         {
-            casReconstructionHeaderSerialize(bw, idx, Working_Data);  // Write the initial header
+            await using var bw = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true);
+            foreach (var (_, idx) in idxMap)
+            {
+                casReconstructionHeaderSerialize(bw, idx, Working_Data);  // Write the initial header
+            }
+
+            var dataPath = Path.Combine(gameDataDir, $"data.{Working_Data:D3}");
+            var fileStream = File.Create(dataPath);
+            Working_Stream.WriteTo(fileStream);
+            fileStream.Close();
+            Working_Stream.SetLength(0);
         }
-                
-        var dataPath = Path.Combine(gameDataDir, $"data.{Working_Data:D3}");
-        var fileStream = File.Create(dataPath);
-        Working_Stream.WriteTo(fileStream);
-        fileStream.Close();
-        Working_Stream.SetLength(0);
     }
 
     private async Task WriteDataEntry(IDX.Entry idxEntry, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup)
