@@ -7,12 +7,11 @@ namespace CASInstaller;
 
 public partial class Product
 {
-    private const int DATA_OFFSET_START = 480;
     private const string cache_dir = "cache";
 
-    private string? _product;
-    private string? _branch;
-    private InstallSettings _installSettings;
+    private readonly string? _product;
+    private readonly string? _branch;
+    private readonly InstallSettings _installSettings;
     private string? _installPath;
     private CDN? _cdn;
     private Version? _version;
@@ -33,10 +32,9 @@ public partial class Product
     private Dictionary<byte, IDX>? idxMap;
     private string? _gameDataDir;
     private BuildInfo? _buildInfo;
-    private List<byte[][]> segmentHeaderKeyList;
+    private List<byte[][]>? segmentHeaderKeyList;
     private Data? Working_Data { get; set; }
-
-
+    
     public Product(string? product, string? branch = "us", InstallSettings installSettings = default!)
     {
         _product = product;
@@ -78,20 +76,14 @@ public partial class Product
         _archiveGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.Archives, _cdnConfig?.ArchiveGroup, _data_dir, "data", 6);
         _patchGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.PatchArchives, _cdnConfig?.PatchArchiveGroup, _data_dir, "patch", 5);
         
-        var encodingContentHash = _buildConfig?.Encoding[0];
-        var encodingEncodedHash = _buildConfig?.Encoding[1];
-        _encoding = await Encoding.GetEncoding(_cdn, encodingEncodedHash, 0, true);
+        _encoding = await Encoding.GetEncoding(_cdn, _buildConfig?.Encoding[1], 0, true);
         _encoding?.LogInfo();
         _encoding?.Dump("encoding.txt");
         
-        var downloadContentHash = _buildConfig?.Download[0];
-        var downloadEncodedHash = _buildConfig?.Download[1];
-        _download = await DownloadManifest.GetDownload(_cdn, downloadEncodedHash);
+        _download = await DownloadManifest.GetDownload(_cdn, _buildConfig?.Download[1]);
         _download?.LogInfo();
 
-        var installContentHash = _buildConfig?.Install[0];
-        var installEncodedHash = _buildConfig?.Install[1];
-        _install = await InstallManifest.GetInstall(_cdn, installEncodedHash);
+        _install = await InstallManifest.GetInstall(_cdn, _buildConfig?.Install[1]);
         _install?.Dump("install.txt");
         _install?.LogInfo();
         
@@ -102,15 +94,15 @@ public partial class Product
         
         BuildIDXMap(_gameDataDir);
         
-        await DownloadAndWriteFile((Hash)downloadEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.DownloadSize[1]!));
-        await DownloadAndWriteFile((Hash)installEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.InstallSize[1]!));
-        await DownloadAndWriteFile((Hash)encodingEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.EncodingSize[1]!));
+        await DownloadAndWriteFile((Hash)_buildConfig?.Download[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.DownloadSize[1]!));
+        await DownloadAndWriteFile((Hash)_buildConfig?.Install[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.InstallSize[1]!));
+        await DownloadAndWriteFile((Hash)_buildConfig?.Encoding[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.EncodingSize[1]!));
         await DownloadAndWriteFile((Hash)_buildConfig?.Size[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.SizeSize[1]!));
         
         await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags, _data_dir);
         await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
 
-        Working_Data.Finalize(_gameDataDir, idxMap!);
+        Working_Data?.Finalize(_gameDataDir, idxMap!);
 
         WriteIDXMap();
         
@@ -133,8 +125,7 @@ public partial class Product
         
         var tags = productConfig.platform.win.config?.tags;
         var tags_64bit = productConfig.platform.win.config?.tags_64bit;
-        if (_installTags == null)
-            _installTags = [];
+        _installTags ??= [];
         if (tags != null)
             _installTags.AddRange(tags);
         if (tags_64bit != null)
@@ -369,9 +360,12 @@ public partial class Product
             for (var i = 0; i < 16; i++)
             {
                 var key = segmentHeaderKeyList[d][i];
-                var bucket = Data.cascGetBucketIndex(key);
-                if (idxMap.TryGetValue(bucket, out var sidx))
+                //var bucket = Data.cascGetBucketIndex(key);
+                //if (idxMap.TryGetValue(bucket, out var sidx))
+                foreach (var (_,sidx) in idxMap)
+                {
                     _ = sidx.Add(new Hash(key), d, i * 30, 30);
+                }
             }
         }
 
@@ -397,7 +391,7 @@ public partial class Product
 
         if (Working_Data == null)
         {
-            Working_Data = new Data(0, out var segmentHeaderKeys, idxMap);
+            Working_Data = new Data(0, out var segmentHeaderKeys);
             segmentHeaderKeyList = [ segmentHeaderKeys ];
         }
 
@@ -412,7 +406,7 @@ public partial class Product
             {
                 Working_Data.Finalize(_gameDataDir, idxMap!);
                 var currentID = Working_Data.ID;
-                Working_Data = new Data(currentID + 1, out var segmentHeaderKeys, idxMap);
+                Working_Data = new Data(currentID + 1, out var segmentHeaderKeys);
                 segmentHeaderKeyList.Add(segmentHeaderKeys);
             }
         }

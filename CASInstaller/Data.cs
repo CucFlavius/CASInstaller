@@ -10,7 +10,7 @@ public class Data
     public readonly int ID;
     private readonly MemoryStream stream;
 
-    public Data(int ID, out byte[][] segmentHeaderKeys, Dictionary<byte, IDX> idxMap)
+    public Data(int ID, out byte[][] segmentHeaderKeys)
     {
         this.ID = ID;
 
@@ -19,7 +19,7 @@ public class Data
         
         using var bw = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         
-        segmentHeaderKeys = casReconstructionHeaderSerialize(bw, ID, idxMap);  // Write the initial header
+        segmentHeaderKeys = casReconstructionHeaderSerialize(bw, ID);  // Write the initial header
     }
 
     public long Offset => stream.Length;
@@ -29,7 +29,7 @@ public class Data
         return Offset + writeSize <= DATA_TOTAL_SIZE_MAXIMUM;
     }
 
-    private byte[][] casReconstructionHeaderSerialize(BinaryWriter bw, int dataNumber, Dictionary<byte, IDX> idxMap)
+    private byte[][] casReconstructionHeaderSerialize(BinaryWriter bw, int dataNumber)
     {
         var container = new CasContainerIndex()
         {
@@ -50,21 +50,10 @@ public class Data
                 size = 30,
                 channel = casIndexChannel.Meta,
             };
-            header.Write(bw, (ushort)dataNumber, (uint)(i * 30));
+            //header.Write(bw, (ushort)dataNumber, (uint)(i * 30));
+            bw.Write(new byte[30]);
         }
-        
-        // Add idx entries for every segment header Meta in every data file
-        for (var i = 0; i < 16; i++)
-        {
-            var key = SegmentHeaderKeys[i];
-            var bucket = cascGetBucketIndex(key);
-            //if (idxMap.TryGetValue(bucket, out var sidx))
-            foreach (var (_, sidx) in idxMap)
-            {
-                _ = sidx.Add(new Hash(key), dataNumber, i * 30, 30);
-            }
-        }
-        
+
         return SegmentHeaderKeys;
     }
     
