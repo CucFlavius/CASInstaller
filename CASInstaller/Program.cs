@@ -4,10 +4,16 @@ internal abstract class Program
 {
     private static async Task Main(string[] args)
     {
-        // TODO: Implement these constants as args
-        const string _product = "wow_classic_era";
-        const string _branch = "eu";
-        const string _installPath = "";
+        // Parse args
+        if (args.Length < 3)
+        {
+            Console.WriteLine("Usage: CASInstaller <product> <branch> <install_path>");
+            return;
+        }
+
+        var _product = args[0];
+        var _branch = args[1];
+        var _installPath = args[2];
     
         // Install the game
         var game_settings = new Product.InstallSettings()
