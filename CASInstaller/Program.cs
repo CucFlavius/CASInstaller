@@ -4,17 +4,63 @@ internal abstract class Program
 {
     private static async Task Main(string[] args)
     {
-        // Parse args
-        if (args.Length < 3)
+        string? _product = null;
+        string? _branch = null;
+        string? _installPath = null;
+        string? _overrideCdnConfig = null;
+        string? _overrideBuildConfig = null;
+        string? _overrideHosts = null;
+
+        if (args.Length == 0)
         {
-            Console.WriteLine("Usage: CASInstaller <product> <branch> <install_path>");
+            Console.WriteLine("Usage: CASInstaller.exe" +
+                              " -p|--product <product:string>" +
+                              " [-b|--branch <branch:string>]" +
+                              " [-i|--install-path <install-path:string>]" +
+                              " [--override-cdn-config <cdn-config:16byteHexString>]" +
+                              " [--override-build-config <build-config:16byteHexString>]" +
+                              " [--override-hosts <hosts:stringSpaceSeparated>]");
             return;
         }
 
-        var _product = args[0];
-        var _branch = args[1];
-        var _installPath = args[2];
-    
+        // Parse args
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "-p":
+                case "--product":
+                    _product = args[++i];
+                    break;
+                case "-b":
+                case "--branch":
+                    _branch = args[++i];
+                    break;
+                case "-i":
+                case "--install-path":
+                    _installPath = args[++i];
+                    break;
+                case "--override-cdn-config":
+                    _overrideCdnConfig = args[++i];
+                    break;
+                case "--override-build-config":
+                    _overrideBuildConfig = args[++i];
+                    break;
+                case "--override-hosts":
+                    _overrideHosts = args[++i];
+                    break;
+            }
+        }
+
+        if (_product == null)
+        {
+            Console.WriteLine("Product not specified.");
+            return;
+        }
+
+        _installPath ??= "";
+        _branch ??= "us";
+        
         // Install the game
         var game_settings = new Product.InstallSettings()
         {
@@ -22,7 +68,10 @@ internal abstract class Program
             CreatePatchResult = true,
             CreateProductDB = true,
             CreateLauncherDB = true,
-            CreateFlavorInfo = true
+            CreateFlavorInfo = true,
+            OverrideCDNConfig = _overrideCdnConfig,
+            OverrideBuildConfig = _overrideBuildConfig,
+            OverrideHosts = _overrideHosts,
         };
         var game = new Product(_product, _branch, game_settings);
         await game.Install(_installPath);

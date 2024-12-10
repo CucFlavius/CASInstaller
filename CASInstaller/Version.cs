@@ -3,7 +3,7 @@ using Spectre.Console;
 
 namespace CASInstaller;
 
-public struct Version
+public class Version
 {
     public string? Product { get; set; }
     public string? Region { get; set; }

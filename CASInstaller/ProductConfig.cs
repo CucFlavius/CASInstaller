@@ -31,14 +31,7 @@ public class ProductConfig
         foreach (var cdnURL in hosts)
         {
             var url = $@"http://{cdnURL}/{cdn?.ConfigPath}/{key?.UrlString}";
-            var encryptedData = await Utils.GetDataFromURL(url);
-            if (encryptedData == null) continue;
-            byte[]? data;
-            if (ArmadilloCrypt.Instance == null)
-                data = encryptedData;
-            else
-                data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-
+            var data = await Utils.GetDataFromURL(url);
             if (data == null) continue;
 
             var options = new JsonReaderOptions
@@ -49,30 +42,18 @@ public class ProductConfig
 
             var reader = new Utf8JsonReader(data, options);
             var productConfig = JsonSerializer.Deserialize<ProductConfig>(ref reader);
+            
             return productConfig;
         }
 
         return null;
     }
     
-    public override string ToString()
+    public void Dump(string productconfigJson)
     {
-        var sb = new StringBuilder();
-        /*
-        sb.AppendLine($"[yellow]Archives:[/] {Archives?.Length}");
-        sb.AppendLine($"[yellow]ArchivesIndexSize:[/] {ArchivesIndexSize?.Length}");
-        sb.AppendLine($"[yellow]ArchiveGroup:[/] {ArchiveGroup}");
-        sb.AppendLine($"[yellow]PatchArchives:[/] {PatchArchives?.Length}");
-        sb.AppendLine($"[yellow]PatchArchivesIndexSize:[/] {PatchArchivesIndexSize?.Length}");
-        sb.AppendLine($"[yellow]PatchArchiveGroup:[/] {PatchArchiveGroup}");
-        sb.AppendLine($"[yellow]FileIndex:[/] {FileIndex}");
-        sb.AppendLine($"[yellow]FileIndexSize:[/] {FileIndexSize}");
-        sb.AppendLine($"[yellow]PatchFileIndex:[/] {PatchFileIndex}");
-        sb.AppendLine($"[yellow]PatchFileIndexSize:[/] {PatchFileIndexSize}");
-        */
-        return sb.ToString();
+        var reserialized = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(productconfigJson, reserialized);
     }
-    
         
     public class All
     {
@@ -82,6 +63,7 @@ public class ProductConfig
     public class Config
     {
         public string data_dir { get; set; }
+        public string decryption_key_name { get; set; }
         public string[] display_locales { get; set; }
         public bool enable_block_copy_patch { get; set; }
         public Form form { get; set; }

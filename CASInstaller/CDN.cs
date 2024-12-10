@@ -3,7 +3,7 @@ using Spectre.Console;
 
 namespace CASInstaller;
 
-public struct CDN
+public class CDN
 {
     private string? Product { get; set; }
     public string? Name { get; set; }

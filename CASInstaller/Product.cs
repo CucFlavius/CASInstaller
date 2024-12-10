@@ -53,13 +53,26 @@ public partial class Product
         KeyService.LoadKeys();
         
         _cdn = await CDN.GetCDN(_product, _branch);
+        if (_installSettings.OverrideHosts != null)
+            if (_cdn != null)
+                _cdn.Hosts = _installSettings.OverrideHosts.Split(' ');
         _cdn?.LogInfo();
         
         _version = await Version.GetVersion(_product, _branch);
+        if (_installSettings.OverrideCDNConfig != null)
+            if (_version != null)
+                _version.CdnConfigHash = new Hash(_installSettings.OverrideCDNConfig);
+        if (_installSettings.OverrideBuildConfig != null)
+            if (_version != null)
+                _version.BuildConfigHash = new Hash(_installSettings.OverrideBuildConfig);
         _version?.LogInfo();
         
         _productConfig = await ProductConfig.GetProductConfig(_cdn, _version?.ProductConfigHash);
+        _productConfig?.Dump("productConfig.json");
         ProcessProductConfig(_productConfig, _installPath);
+        
+        if (!string.IsNullOrEmpty(_productConfig?.all.config.decryption_key_name))
+            ArmadilloCrypt.Init(_productConfig.all.config.decryption_key_name);
         
         _buildConfig = await BuildConfig.GetBuildConfig(_cdn, _version?.BuildConfigHash, _data_dir);
         _buildConfig?.LogInfo();

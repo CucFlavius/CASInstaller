@@ -195,11 +195,18 @@ public class Encoding
                 throw new Exception("No hosts found for CDN.");
             foreach (var cdnURL in hosts)
             {
-                var content = await Utils.GetDataFromURL($"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}");
-                if (encodingSize != 0 && encodingSize != content?.Length || content == null)
+                var encryptedData = await Utils.GetDataFromURL($"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}");
+                if (encodingSize != 0 && encodingSize != encryptedData?.Length || encryptedData == null)
                     continue;
 
-                using var ms = new MemoryStream(content);
+                byte[]? data;
+                if (ArmadilloCrypt.Instance == null)
+                    data = encryptedData;
+                else
+                    data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+                if (data == null) continue;
+                
+                using var ms = new MemoryStream(data);
                 await using var blte = new BLTE.BLTEStream(ms, default);
                 using var fso = new MemoryStream();
                 await blte.CopyToAsync(fso);
