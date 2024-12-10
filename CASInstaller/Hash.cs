@@ -25,7 +25,7 @@ public readonly struct Hash : IEquatable<Hash>, IComparable<Hash>
         Key = br.ReadBytes(16);
     }
     
-    public Hash(string hexKey)
+    public Hash(string? hexKey)
     {
         Key = new byte[hexKey.Length / 2];
         for (var i = 0; i < hexKey.Length; i += 2)

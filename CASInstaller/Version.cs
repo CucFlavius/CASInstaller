@@ -6,18 +6,18 @@ namespace CASInstaller;
 public struct Version
 {
     public string? Product { get; set; }
-    public string Region { get; set; }
+    public string? Region { get; set; }
     public Hash BuildConfigHash { get; set; }
     public Hash CdnConfigHash { get; set; }
     public Hash KeyRing { get; set; }
     public int BuildId { get; set; }
-    public string VersionsName { get; set; }
+    public string? VersionsName { get; set; }
     public Hash ProductConfigHash { get; set; }
 
     public Version(string data, string? product)
     {
         Product = product;
-        var parts = data.Split('|');
+        string?[] parts = data.Split('|');
         
         Region = parts[0];
         BuildConfigHash = new Hash(parts[1]);

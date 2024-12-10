@@ -12,26 +12,26 @@ public struct BuildConfig
     public string[] EncodingSize;
     public Hash[] Size;
     public string[] SizeSize;
-    public string BuildName;
-    public string BuildPlaybuildInstaller;
-    public string BuildProduct;
-    public string BuildUid;
-    public string Patch;
-    public string PatchSize;
-    public string PatchConfig;
-    public string BuildBranch;
-    public string BuildNumber;
-    public string BuildAttributes;
-    public string BuildComments;
-    public string BuildCreator;
-    public string BuildFixedHash;
-    public string BuildReplayHash;
-    public string BuildManifestVersion;
+    public string? BuildName;
+    public string? BuildPlaybuildInstaller;
+    public string? BuildProduct;
+    public string? BuildUid;
+    public string? Patch;
+    public string? PatchSize;
+    public string? PatchConfig;
+    public string? BuildBranch;
+    public string? BuildNumber;
+    public string? BuildAttributes;
+    public string? BuildComments;
+    public string? BuildCreator;
+    public string? BuildFixedHash;
+    public string? BuildReplayHash;
+    public string? BuildManifestVersion;
     public string[] InstallSize;
     public string[] DownloadSize;
-    public string PartialPriority;
-    public string PartialPrioritySize;
-    public string BuildSignatureFile;
+    public string? PartialPriority;
+    public string? PartialPrioritySize;
+    public string? BuildSignatureFile;
     public string[] PatchIndex;
     public string[] PatchIndexSize;
 
@@ -52,14 +52,14 @@ public struct BuildConfig
             if (t.StartsWith($"#") || t.Length == 0)
                 continue;
 
-            var cols = t.Split([" = "], StringSplitOptions.RemoveEmptyEntries);
+            string?[] cols = t.Split([" = "], StringSplitOptions.RemoveEmptyEntries);
             switch (cols[0])
             {
                 case "root":
                     Root = new Hash(cols[1]);
                     break;
                 case "download":
-                    var downloadEntries = cols[1].Split(' ');
+                    string?[] downloadEntries = cols[1].Split(' ');
                     Download = new Hash[downloadEntries.Length];
                     for (var i = 0; i < downloadEntries.Length; i++)
                     {
@@ -67,7 +67,7 @@ public struct BuildConfig
                     }
                     break;
                 case "install":
-                    var installEntries = cols[1].Split(' ');
+                    string?[] installEntries = cols[1].Split(' ');
                     Install = new Hash[installEntries.Length];
                     for (var i = 0; i < installEntries.Length; i++)
                     {
@@ -75,7 +75,7 @@ public struct BuildConfig
                     }
                     break;
                 case "encoding":
-                    var encodingEntries = cols[1].Split(' ');
+                    string?[] encodingEntries = cols[1].Split(' ');
                     Encoding = new Hash[encodingEntries.Length];
                     for (var i = 0; i < encodingEntries.Length; i++)
                     {
@@ -86,7 +86,7 @@ public struct BuildConfig
                     EncodingSize = cols[1].Split(' ');
                     break;
                 case "size":
-                    var sizeEntries = cols[1].Split(' ');
+                    string?[] sizeEntries = cols[1].Split(' ');
                     Size = new Hash[sizeEntries.Length];
                     for (var i = 0; i < sizeEntries.Length; i++)
                     {

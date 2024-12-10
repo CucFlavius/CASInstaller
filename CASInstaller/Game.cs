@@ -31,8 +31,9 @@ public class Game(string product, string branch = "us")
     private Encoding? _encoding;
     private DownloadManifest? _download;
     private InstallManifest? _install;
-    private Dictionary<byte, IDX> idxMap;
-    private string gameDataDir;
+    private Dictionary<byte, IDX>? idxMap;
+    private string? _gameDataDir;
+    private BuildInfo? _buildInfo;
 
     public int Working_Data { get; set; } = 0;
     public int Working_Offset { get; set; } = DATA_OFFSET_START;
@@ -93,11 +94,11 @@ public class Game(string product, string branch = "us")
         _install?.LogInfo();
         
         // Download data //
-        gameDataDir = Path.Combine(_data_dir ?? "", "data");
-        if (!Directory.Exists(gameDataDir))
-            Directory.CreateDirectory(gameDataDir);
+        _gameDataDir = Path.Combine(_data_dir ?? "", "data");
+        if (!Directory.Exists(_gameDataDir))
+            Directory.CreateDirectory(_gameDataDir);
         
-        BuildIDXMap(gameDataDir);
+        BuildIDXMap(_gameDataDir);
         
         await DownloadAndWriteFile((Hash)downloadEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.DownloadSize[1]!));
         await DownloadAndWriteFile((Hash)installEncodedHash!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.InstallSize[1]!));
@@ -107,15 +108,17 @@ public class Game(string product, string branch = "us")
         await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags, _data_dir);
         await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
 
-        await DataFileComplete();
+        await DataFileComplete(_gameDataDir);
         
         WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
         WritePatchResult(_game_dir);
         WriteLauncherDB(_game_dir);
+        WriteBuildInfo(_game_dir);
+        WriteFlavorInfo(_shared_game_dir, _version);
         
         await DownloadLauncher(_productConfig, _branch, _game_dir);
     }
-    
+
     private void ProcessProductConfig(ProductConfig? productConfig, string installPath)
     {
         if (productConfig == null)
@@ -426,7 +429,7 @@ public class Game(string product, string branch = "us")
             
             if (Working_Offset + (int)writeSize > DATA_TOTAL_SIZE_MAXIMUM)
             {
-                await DataFileComplete();
+                await DataFileComplete(_gameDataDir);
 
                 Working_Offset = DATA_OFFSET_START;
 
@@ -440,7 +443,7 @@ public class Game(string product, string branch = "us")
         }
     }
 
-    private async Task DataFileComplete()
+    private async Task DataFileComplete(string gameDataDir)
     {
         if (Working_Stream != null)
         {
@@ -701,6 +704,48 @@ public class Game(string product, string branch = "us")
         File.SetAttributes(path, FileAttributes.Hidden);
     }
     
+    private void WriteBuildInfo(string? gameDir)
+    {
+        if (gameDir == null)
+            return;
+        
+        var path = Path.Combine(gameDir, ".build.info");
+            
+        _buildInfo = new BuildInfo(path);
+        var build = new BuildInfo.Build
+        {
+            Branch = _cdn?.Name,
+            Active = 1,
+            BuildKey = _version?.BuildConfigHash ?? new Hash(),
+            CDNKey = _version?.CdnConfigHash ?? new Hash(),
+            InstallKey = _buildConfig?.Install[1] ?? new Hash(),
+            IMSize = -1,
+            CDNPath = _cdn?.Path,
+            CDNHosts = _cdn?.Hosts,
+            CDNServers = _cdn?.Servers,
+            Tags = ["Windows", "x86_64", "EU?", "acct-ROU?", "geoip-RO?", "enUS", "speech?:Windows", "x86_64", "EU?", "acct-ROU?", "geoip-RO?", "enUS", "text?" ],
+            Armadillo = "",
+            LastActivated = "",
+            Version = _version?.VersionsName,
+            KeyRing = _version?.KeyRing ?? new Hash(),
+            Product = _version?.Product
+        };
+
+        _buildInfo.AddBuild(build);
+        _buildInfo.Write(path);
+    }
+    
+    private void WriteFlavorInfo(string? shared_game_dir, Version? version)
+    {
+        if (shared_game_dir == null)
+            return;
+
+        var filePath = Path.Combine(shared_game_dir, ".flavor.info");
+        using var sw = new StreamWriter(filePath);
+        sw.WriteLine("Product Flavor!STRING:0");
+        sw.WriteLine(version?.Product);
+    }
+    
     private async Task DownloadLauncher(ProductConfig? productConfig, string? branch, string? game_dir)
     {
         if (productConfig == null)
@@ -737,56 +782,15 @@ public class Game(string product, string branch = "us")
         var launcher_install = await InstallManifest.GetInstall(launcher_cdn, launcher_buildConfig.Install[1]);
         launcher_install?.LogInfo();
         //launcher_install.Dump("launcher_install.txt");
-        await ProcessInstall(launcher_install, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
         var launcher_download = await DownloadManifest.GetDownload(launcher_cdn, launcher_buildConfig.Download[1]);
-        launcher_download.LogInfo();
+        launcher_download?.LogInfo();
+        var launcher_gameDataDir = Path.Combine(data_dir ?? "", "data");
+        if (!Directory.Exists(launcher_gameDataDir))
+            Directory.CreateDirectory(launcher_gameDataDir);
+        BuildIDXMap(launcher_gameDataDir);
         await ProcessDownload(launcher_download, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, null, tags, data_dir);
+        await ProcessInstall(launcher_install, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
+        await DataFileComplete(launcher_gameDataDir);
         File.SetAttributes(data_dir, FileAttributes.Hidden);
-    }
-
-    private void TestGenerateSegmentHeaderKeys()
-    {
-        /*
-        using var headerMs = new MemoryStream();
-        using var headerBw = new BinaryWriter(headerMs);
-        headerBw.Write(new byte[] {0x58, 0xEA, 0xCB, 0x4A, 0x76, 0x57, 0xDF, 0x28, 0x78, 0xD2, 0xAE, 0x15, 0x21, 0x00, 0x00, 0x06});
-        headerBw.Write(30);
-        headerBw.Write((byte)1);
-        headerBw.Write((byte)0);
-
-        headerBw.Flush();
-        headerMs.Position = 0;
-        var checksumA = HashAlgo.HashLittle(headerMs.ToArray(), 0x16, 0x3D6BE971);
-        headerMs.Position = 0x16;
-        headerBw.Write(checksumA);
-            
-        headerBw.Flush();
-        headerMs.Position = 0;
-        var checksumB = HashAlgo.CalculateChecksum(headerMs.ToArray(), 0, 0);
-        
-        AnsiConsole.WriteLine(checksumA + " " + checksumB);
-        */
-        //CasContainerIndex casContainerIndex = new CasContainerIndex("World of Warcraft", 30, CasDynamicOpenMode.Reconstruction);
-        //casContainerIndex.GenerateSegmentHeaderKeys(1, out var shortSegmentKeys, out var keys);
-
-        //foreach (var key in keys)
-        //{
-        //    var reversed = key.Data.Reverse().ToArray();
-        //    AnsiConsole.WriteLine(reversed.ToHexString());
-        //}
-        
-        CasContainerIndex container = new CasContainerIndex()
-        {
-            BaseDir = "D:\\Games\\World of Warcraft\\Data\\",
-            BindMode = true,
-            MaxSize = 30
-        };
-        (CasContainerIndex.CasResult Result, byte[][] SegmentHeaderKeys, byte[][] ShortSegmentHeaderKeys) = container.GenerateSegmentHeaderKeys(0);
-        foreach (var key in SegmentHeaderKeys)
-        {
-            var reversed = key.Reverse().ToArray();
-            AnsiConsole.WriteLine(reversed.ToHexString());
-        }
-        
     }
 }

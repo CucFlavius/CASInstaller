@@ -34,14 +34,14 @@ public struct CDNConfig
             if (line.StartsWith('#'))
                 continue;
             
-            var parts = line.Split(" = ");
+            string?[] parts = line.Split(" = ");
             var key = parts[0];
             var value = parts[1];
 
             switch (key)
             {
                 case "archives":
-                    var archiveParts = value.Split(" ");
+                    string?[] archiveParts = value.Split(" ");
                     Archives = new Hash[archiveParts.Length];
                     for (var i = 0; i < archiveParts.Length; i++)
                     {
@@ -60,7 +60,7 @@ public struct CDNConfig
                     ArchiveGroup = new Hash(value);
                     break;
                 case "patch-archives":
-                    var patchArchiveParts = value.Split(" ");
+                    string?[] patchArchiveParts = value.Split(" ");
                     PatchArchives = new Hash[patchArchiveParts.Length];
                     for (var i = 0; i < patchArchiveParts.Length; i++)
                     {
