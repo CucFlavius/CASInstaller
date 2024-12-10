@@ -1,29 +1,27 @@
-﻿using System.Collections;
-using System.Text;
+﻿using System.Text;
 using Spectre.Console;
 
 namespace CASInstaller;
 
 public class DownloadManifest
 {
-    public int m_size;
-    public byte m_version;
-    public byte m_eKeySize;
-    public bool m_checkSumTypeConstant;
-    public uint m_numEntries;
-    public ushort m_numTags;
-    public byte m_numFlagsSize;
+    private readonly byte m_version;
+    private readonly byte m_eKeySize;
+    private readonly bool m_checkSumTypeConstant;
+    private readonly uint m_numEntries;
+    private readonly ushort m_numTags;
+    private readonly byte m_numFlagsSize;
     public byte m_priorityBias;
     
-    public DownloadEntry[] entries;
-    public TagInfo[] tags;
-    
-    public DownloadManifest(byte[] data)
+    public readonly DownloadEntry[] entries;
+    public readonly TagInfo[] tags;
+
+    private DownloadManifest(byte[] data)
     {
-        m_size = data.Length;
+        var mSize = data.Length;
         
-        if (m_size <= 10)
-            throw new Exception($"Detected truncated download manifest. Only got {m_size} bytes, but minimum header size is 10 bytes.");
+        if (mSize <= 10)
+            throw new Exception($"Detected truncated download manifest. Only got {mSize} bytes, but minimum header size is 10 bytes.");
         
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
@@ -45,15 +43,16 @@ public class DownloadManifest
         if (m_version >= 2)
         {
             m_numFlagsSize = br.ReadByte();
-            if (m_version > 4)
+            switch (m_version)
             {
-                throw new Exception($"Unsupported number of flag bytes in download manifest: {m_numFlagsSize}");
-            }
-
-            if (m_version == 3)
-            {
-                m_priorityBias = br.ReadByte();
-                byte[] unknown = br.ReadBytes(3);
+                case > 4:
+                    throw new Exception($"Unsupported number of flag bytes in download manifest: {m_numFlagsSize}");
+                case 3:
+                {
+                    m_priorityBias = br.ReadByte();
+                    br.ReadBytes(3);
+                    break;
+                }
             }
         }
 
@@ -89,10 +88,10 @@ public class DownloadManifest
     public class DownloadEntry
     {
         public Hash eKey;
-        public ulong size;
-        public sbyte priority;
-        public uint checksum;
-        public byte flags;
+        public readonly ulong size;
+        public readonly sbyte priority;
+        private readonly uint checksum;
+        private readonly byte flags;
         public int tagIndices;
         
         public DownloadEntry(BinaryReader br, byte checksumSize, bool hasChecksumInEntry, byte flagSize)
@@ -136,18 +135,12 @@ public class DownloadManifest
             throw new Exception("No hosts found for CDN.");
         foreach (var cdnURL in hosts)
         {
-            var url = $@"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}";
+            var url = $@"https://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}";
             var encryptedData = await Utils.GetDataFromURL(url);
             if (encryptedData == null) continue;
 
-            byte[]? data;
-            if (ArmadilloCrypt.Instance == null)
-                data = encryptedData;
-            else
-                data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-            
-            if (data == null) continue;
-            
+            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance.DecryptData(key, encryptedData);
+
             using var ms = new MemoryStream(data);
             await using var blte = new BLTE.BLTEStream(ms, default);
             using var fso = new MemoryStream();

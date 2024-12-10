@@ -4,6 +4,7 @@ internal abstract class Program
 {
     private static async Task Main(string[] args)
     {
+        // TODO: Implement these constants as args
         const string _product = "wow_classic_era";
         const string _branch = "eu";
         const string _installPath = "";
@@ -25,6 +26,7 @@ internal abstract class Program
         var bootstrapper_product = game._productConfig?.all.config.launcher_install_info.bootstrapper_product ?? "bts";
         var bootstrapper_branch = game._productConfig?.all.config.launcher_install_info.bootstrapper_branch ?? "launcher";
         var bootstrapper_game_dir = Path.Combine(_installPath, game._productConfig?.all.config.form.game_dir.dirname ?? "World of Warcraft");
+        var bootstrapper_data_dir = Path.Combine(bootstrapper_game_dir, ".battle.net");
         var bootstrapper_settings = new Product.InstallSettings()
         {
             CreateBuildInfo = false,
@@ -37,9 +39,11 @@ internal abstract class Program
         {
             _game_dir = bootstrapper_game_dir,
             _shared_game_dir = bootstrapper_game_dir,
-            _data_dir = Path.Combine(bootstrapper_game_dir, ".battle.net"),
+            _data_dir = bootstrapper_data_dir,
             _installTags = [product_tag]
         };
         await launcher.Install(_installPath);
+        // The launcher directory is usually hidden
+        File.SetAttributes(bootstrapper_data_dir, File.GetAttributes(bootstrapper_data_dir) | FileAttributes.Hidden);
     }
 }
