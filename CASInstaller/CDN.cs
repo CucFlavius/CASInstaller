@@ -18,6 +18,11 @@ public struct CDN
         Product = product;
         var parts = data.Split('|');
         
+        if (parts.Length != 5)
+        {
+            return;
+        }
+        
         Name = parts[0];
         Path = parts[1];
         Hosts = parts[2].Split(' ');
@@ -50,13 +55,14 @@ public struct CDN
         return cdns.ToArray();
     }
     
-    public static async Task<CDN> GetCDN(string? product, string? branch = "us")
+    public static async Task<CDN?> GetCDN(string? product, string? branch = "us")
     {
         var url = $@"http://us.patch.battle.net:1119/{product}/cdns";
         var data = await Utils.GetDataFromURL(url);
         
         var stringData = System.Text.Encoding.UTF8.GetString(data);
         var lines = stringData.Split('\n');
+        List<CDN> cdns = new();
         for (var index = 1; index < lines.Length; index++)  // Ignoring first line that has to table headers
         {
             var line = lines[index];
@@ -68,14 +74,20 @@ public struct CDN
             }
             
             var cdn = new CDN(line, product);
-
+            cdns.Add(cdn);
             if (cdn.Name == branch)
             {
                 return cdn;
             }
         }
+
+        // In case there isn't a branch with the same name as the product (eg. "launcher" for "bts")
+        if (cdns.Count > 0)
+        {
+            return cdns[0];
+        }
         
-        throw new Exception("CDN not found");
+        return null;
     }
     
     public override string ToString()

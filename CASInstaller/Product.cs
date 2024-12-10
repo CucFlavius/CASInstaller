@@ -5,23 +5,23 @@ using Spectre.Console;
 
 namespace CASInstaller;
 
-public class Game(string product, string branch = "us")
+public partial class Product
 {
-    private readonly byte[] reconstruction_hash = [0xD9, 0x4B, 0xCD, 0x8C, 0x43, 0x18, 0x6B, 0x30, 0xEC, 0xC7, 0xDB, 0xE1, 0x11, 0x00];
     private const int DATA_TOTAL_SIZE_MAXIMUM = 1023 * 1024 * 1024;
     private const int DATA_OFFSET_START = 480;
     private const string cache_dir = "cache";
-    private readonly string? _product = product;
-    private readonly string? _branch = branch;
-    
+
+    private string? _product;
+    private string? _branch;
+    private InstallSettings _installSettings;
     private string? _installPath;
     private CDN? _cdn;
     private Version? _version;
-    private ProductConfig? _productConfig;
-    private string? _game_dir;
-    private string? _shared_game_dir;
-    private string? _data_dir;
-    private List<string>? _installTags;
+    public ProductConfig? _productConfig;
+    public string? _game_dir;
+    public string? _shared_game_dir;
+    public string? _data_dir;
+    public List<string>? _installTags;
     private BuildConfig? _buildConfig;
     private CDNConfig? _cdnConfig;
     private FileIndex? _fileIndex;
@@ -39,11 +39,15 @@ public class Game(string product, string branch = "us")
     public int Working_Offset { get; set; } = DATA_OFFSET_START;
     public MemoryStream? Working_Stream { get; set; }
 
+    public Product(string? product, string? branch = "us", InstallSettings installSettings = default!)
+    {
+        _product = product;
+        _branch = branch;
+        _installSettings = installSettings;
+    }
+    
     public async Task Install(string installPath)
     {
-        //TestGenerateSegmentHeaderKeys();
-        //return;
-        
         if (!Directory.Exists(cache_dir))
             Directory.CreateDirectory(cache_dir);
         
@@ -110,13 +114,16 @@ public class Game(string product, string branch = "us")
 
         await DataFileComplete(_gameDataDir);
         
-        WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
-        WritePatchResult(_game_dir);
-        WriteLauncherDB(_game_dir);
-        WriteBuildInfo(_game_dir);
-        WriteFlavorInfo(_shared_game_dir, _version);
-        
-        await DownloadLauncher(_productConfig, _branch, _game_dir);
+        if (_installSettings.CreateProductDB)
+            WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
+        if (_installSettings.CreatePatchResult)
+            WritePatchResult(_game_dir);
+        if (_installSettings.CreateLauncherDB)
+            WriteLauncherDB(_game_dir);
+        if (_installSettings.CreateBuildInfo)
+            WriteBuildInfo(_game_dir);
+        if (_installSettings.CreateFlavorInfo)
+            WriteFlavorInfo(_shared_game_dir, _version);
     }
 
     private void ProcessProductConfig(ProductConfig? productConfig, string installPath)
@@ -124,20 +131,28 @@ public class Game(string product, string branch = "us")
         if (productConfig == null)
             return;
         
-        var tags = productConfig.platform.win.config.tags;
-        var tags_64bit = productConfig.platform.win.config.tags_64bit;
-        _installTags = [];
-        _installTags.AddRange(tags);
-        _installTags.AddRange(tags_64bit);
+        var tags = productConfig.platform.win.config?.tags;
+        var tags_64bit = productConfig.platform.win.config?.tags_64bit;
+        if (_installTags == null)
+            _installTags = [];
+        if (tags != null)
+            _installTags.AddRange(tags);
+        if (tags_64bit != null)
+            _installTags.AddRange(tags_64bit);
         
-        _game_dir = Path.Combine(installPath, productConfig.all.config.form.game_dir.dirname);
-        _shared_game_dir = Path.Combine(_game_dir, productConfig.all.config.shared_container_default_subfolder);
+        if (productConfig.all?.config?.form?.game_dir?.dirname != null)
+            _game_dir = Path.Combine(installPath, productConfig.all.config.form.game_dir.dirname);
+        if (!Directory.Exists(_game_dir))
+            Directory.CreateDirectory(_game_dir!);
+        if (productConfig.all?.config?.shared_container_default_subfolder != null)
+            _shared_game_dir = Path.Combine(_game_dir!, productConfig.all.config.shared_container_default_subfolder);
         if (!Directory.Exists(_shared_game_dir))
-            Directory.CreateDirectory(_shared_game_dir);
+            Directory.CreateDirectory(_shared_game_dir!);
         
-        _data_dir = Path.Combine(_game_dir, productConfig.all.config.data_dir);
+        if (productConfig?.all?.config?.data_dir != null)
+            _data_dir = Path.Combine(_game_dir!, productConfig.all.config.data_dir);
         if (!Directory.Exists(_data_dir))
-            Directory.CreateDirectory(_data_dir);
+            Directory.CreateDirectory(_data_dir!);
     }
 
     private static async Task<ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>?> ProcessIndices(
@@ -424,8 +439,7 @@ public class Game(string product, string branch = "us")
 
         if (idxMap.TryGetValue(bucket, out var idx))
         {
-            if (Working_Stream == null)
-                Working_Stream = new MemoryStream();
+            Working_Stream ??= new MemoryStream();
             
             if (Working_Offset + (int)writeSize > DATA_TOTAL_SIZE_MAXIMUM)
             {
@@ -490,7 +504,7 @@ public class Game(string product, string branch = "us")
 
         // Ensure we're not overwriting stream position by reusing the BinaryWriter
         await using var bws = new BinaryWriter(Working_Stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        var header = new casReconstructionHeader()
+        var header = new CasReconstructionHeader()
         {
             BLTEHash = key.Key.Reverse().ToArray(),
             size = idxEntry.Size,
@@ -500,45 +514,6 @@ public class Game(string product, string branch = "us")
         bws.Seek(offset, SeekOrigin.Begin);
         header.Write(bws, (ushort)archiveID, (uint)offset);
         bws.Write(data);
-    }
-
-    enum casIndexChannel : byte
-    {
-        Data = 0x0,
-        Meta = 0x1,
-    }
-    
-    struct casReconstructionHeader
-    {
-        public byte[] BLTEHash;
-        public uint size;
-        public casIndexChannel channel;
-        private uint checksumA;
-        private uint checksumB;
-
-        public void Write(BinaryWriter bw, ushort archiveIndex, uint archiveOffset)
-        {
-            using var headerMs = new MemoryStream();
-            using var headerBw = new BinaryWriter(headerMs);
-            headerBw.Write(BLTEHash);
-            headerBw.Write(size);
-            headerBw.Write((byte)channel);
-            headerBw.Write((byte)0);
-
-            headerBw.Flush();
-            headerMs.Position = 0;
-            var checksumA = HashAlgo.HashLittle(headerMs.ToArray(), 0x16, 0x3D6BE971);
-            headerMs.Position = 0x16;
-            headerBw.Write(checksumA);
-            
-            headerBw.Flush();
-            headerMs.Position = 0;
-            var checksumB = HashAlgo.CalculateChecksum(headerMs.ToArray(), archiveIndex, archiveOffset);
-            headerMs.Position = 0x1A;
-            headerBw.Write(checksumB);
-
-            bw.Write(headerMs.ToArray());
-        }
     }
     
     private void casReconstructionHeaderSerialize(BinaryWriter bw, IDX idx, int dataNumber)
@@ -557,7 +532,7 @@ public class Game(string product, string branch = "us")
             var reversedSegmentHeaderKey = SegmentHeaderKeys[i].Reverse().ToArray();
             var idxEntry = idx.Add(new Hash(SegmentHeaderKeys[i]), Working_Data, i * 30, 30);
             
-            var header = new casReconstructionHeader()
+            var header = new CasReconstructionHeader()
             {
                 BLTEHash = reversedSegmentHeaderKey,
                 size = 30,
@@ -573,13 +548,7 @@ public class Game(string product, string branch = "us")
         var i = k[0] ^ k[1] ^ k[2] ^ k[3] ^ k[4] ^ k[5] ^ k[6] ^ k[7] ^ k[8];
         return (byte)((i & 0xf) ^ (i >> 4));
     }
-    
-    private static int cascGetBucketIndexCrossReference(Hash key)
-    {
-        var i = cascGetBucketIndex(key);
-        return (i + 1) % 16;
-    }
-    
+
     private void WriteProductDB(string? gameDir, Version? version, ProductConfig? productConfig, BuildConfig? buildConfig)
     {
         var prod = new ProductInstall
@@ -744,53 +713,5 @@ public class Game(string product, string branch = "us")
         using var sw = new StreamWriter(filePath);
         sw.WriteLine("Product Flavor!STRING:0");
         sw.WriteLine(version?.Product);
-    }
-    
-    private async Task DownloadLauncher(ProductConfig? productConfig, string? branch, string? game_dir)
-    {
-        if (productConfig == null)
-            return;
-
-        var tags = new List<string>();
-        tags.AddRange(productConfig.platform.win.config.tags);  // Eg. Add "Windows" tag
-        
-        var product_tag = productConfig.all.config.launcher_install_info.product_tag;
-        var bootstrapper_product = productConfig.all.config.launcher_install_info.bootstrapper_product; // "bts"
-        var bootstrapper_branch = productConfig.all.config.launcher_install_info.bootstrapper_branch;   // "launcher"
-        tags.Add(product_tag);  // Eg. Add "wow" tag
-        
-        var data_dir = Path.Combine(game_dir ?? "", ".battle.net");
-        if (!Directory.Exists(data_dir))
-            Directory.CreateDirectory(data_dir);
-        
-        //var version = "http://us.patch.battle.net:1119/bts/versions";
-        var launcher_version = await Version.GetVersion(bootstrapper_product, bootstrapper_branch);
-        launcher_version.LogInfo();
-        var launcher_cdn = await CDN.GetCDN(bootstrapper_product, branch);
-        launcher_cdn.LogInfo();
-        var launcher_buildConfig = await BuildConfig.GetBuildConfig(launcher_cdn, launcher_version.BuildConfigHash, data_dir);
-        launcher_buildConfig.LogInfo();
-        var launcher_cdnConfig = await CDNConfig.GetConfig(launcher_cdn, launcher_version.CdnConfigHash, data_dir);
-        launcher_cdnConfig.LogInfo();
-        var launcher_archiveGroup = await ProcessIndices(
-            launcher_cdn, launcher_cdnConfig, launcher_cdnConfig.Archives, launcher_cdnConfig.ArchiveGroup,
-            data_dir, "data", 6);
-        var launcher_encoding = await Encoding.GetEncoding(launcher_cdn, launcher_buildConfig.Encoding[1]);
-        launcher_encoding.LogInfo();
-        launcher_encoding.Dump("launcher_encoding.txt");
-        var launcher_fileIndex = await FileIndex.GetDataIndex(launcher_cdn, launcher_cdnConfig.FileIndex, "data", data_dir);
-        var launcher_install = await InstallManifest.GetInstall(launcher_cdn, launcher_buildConfig.Install[1]);
-        launcher_install?.LogInfo();
-        //launcher_install.Dump("launcher_install.txt");
-        var launcher_download = await DownloadManifest.GetDownload(launcher_cdn, launcher_buildConfig.Download[1]);
-        launcher_download?.LogInfo();
-        var launcher_gameDataDir = Path.Combine(data_dir ?? "", "data");
-        if (!Directory.Exists(launcher_gameDataDir))
-            Directory.CreateDirectory(launcher_gameDataDir);
-        BuildIDXMap(launcher_gameDataDir);
-        await ProcessDownload(launcher_download, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, null, tags, data_dir);
-        await ProcessInstall(launcher_install, launcher_cdn, launcher_cdnConfig, launcher_encoding, launcher_archiveGroup, tags, game_dir);
-        await DataFileComplete(launcher_gameDataDir);
-        File.SetAttributes(data_dir, FileAttributes.Hidden);
     }
 }

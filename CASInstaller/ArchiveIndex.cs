@@ -244,6 +244,8 @@ public struct ArchiveIndex
         // Write keys to the TOC
         foreach (var key in lastBlockEkeys)
         {
+            if (key.Key == null)
+                continue;
             tocBW.Write(key.Key);
         }
 
