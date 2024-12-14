@@ -115,7 +115,7 @@ public class Data
             }
             else
             {
-                var encryptedData = await Utils.GetDataFromURL(url, (int)indexEntry.offset, (int)indexEntry.size);
+                var encryptedData = await cdn.GetDataFromURL(url, (int)indexEntry.offset, (int)indexEntry.size);
                 if (encryptedData == null)
                     continue;
 
@@ -145,7 +145,7 @@ public class Data
         foreach (var cdnURL in hosts)
         {
             var url = $@"http://{cdnURL}/{cdn?.Path}/data/{key.UrlString}";
-            var encryptedData = await Utils.GetDataFromURL(url);
+            var encryptedData = await cdn.GetDataFromURL(url);
 
             if (encryptedData == null)
                 continue;

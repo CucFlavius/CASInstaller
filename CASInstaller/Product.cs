@@ -58,7 +58,7 @@ public partial class Product
                 _cdn.Hosts = _installSettings.OverrideHosts.Split(' ');
         _cdn?.LogInfo();
         
-        _version = await Version.GetVersion(_product, _branch);
+        _version = await Version.GetVersion(_cdn, _product, _branch);
         if (_installSettings.OverrideCDNConfig != null)
             if (_version != null)
                 _version.CdnConfigHash = new Hash(_installSettings.OverrideCDNConfig);
@@ -150,6 +150,8 @@ public partial class Product
             Directory.CreateDirectory(_game_dir!);
         if (productConfig.all?.config?.shared_container_default_subfolder != null)
             _shared_game_dir = Path.Combine(_game_dir!, productConfig.all.config.shared_container_default_subfolder);
+        if (_shared_game_dir == null)
+            _shared_game_dir = _game_dir;
         if (!Directory.Exists(_shared_game_dir))
             Directory.CreateDirectory(_shared_game_dir!);
         
@@ -223,6 +225,7 @@ public partial class Product
         foreach (var entry in install.entries)
         {
             var checksOut = true;
+
             foreach (var tag in tags)
             {
                 if (tagIndexMap.TryGetValue(tag, out var tagIndex))
@@ -233,7 +236,7 @@ public partial class Product
                     }
                 }
             }
-            
+
             if (checksOut)
                 tagFilteredEntries.Add(entry);
         }
@@ -274,12 +277,19 @@ public partial class Product
             
             if (data == null) continue;
             
-            // Decode BLTE, install files must be extracted
-            using var ms = new MemoryStream(data);
-            await using var blte = new BLTE.BLTEStream(ms, default);
-            using var fso = new MemoryStream();
-            await blte.CopyToAsync(fso);
-            data = fso.ToArray();
+            try
+            {
+                // Decode BLTE, install files must be extracted
+                using var ms = new MemoryStream(data);
+                await using var blte = new BLTE.BLTEStream(ms, default);
+                using var fso = new MemoryStream();
+                await blte.CopyToAsync(fso);
+                data = fso.ToArray();
+            }
+            catch (Exception e)
+            {
+                AnsiConsole.WriteException(e);
+            }
             
             var dirPath = Path.GetDirectoryName(filePath) ?? "";
             if (!Directory.Exists(dirPath))
@@ -421,6 +431,7 @@ public partial class Product
                 var currentID = Working_Data.ID;
                 Working_Data = new Data(currentID + 1, out var segmentHeaderKeys);
                 segmentHeaderKeyList.Add(segmentHeaderKeys);
+                GC.Collect();
             }
         }
     }

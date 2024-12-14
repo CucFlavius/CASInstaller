@@ -136,7 +136,7 @@ public class DownloadManifest
         foreach (var cdnURL in hosts)
         {
             var url = $@"https://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}";
-            var encryptedData = await Utils.GetDataFromURL(url);
+            var encryptedData = await cdn.GetDataFromURL(url);
             if (encryptedData == null) continue;
 
             var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance.DecryptData(key, encryptedData);

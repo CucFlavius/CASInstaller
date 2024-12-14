@@ -28,10 +28,10 @@ public class Version
         ProductConfigHash = new Hash(parts[6]);
     }
 
-    public static async Task<Version[]> GetAllVersions(string? product)
+    public static async Task<Version[]> GetAllVersions(CDN cdn, string? product)
     {
         var url = $@"http://us.patch.battle.net:1119/{product}/versions";
-        var data = await Utils.GetDataFromURL(url);
+        var data = await cdn.GetDataFromURL(url);
         
         if (data == null)
             throw new ArgumentNullException(nameof(data), "Downloaded data cannot be null.");
@@ -56,10 +56,10 @@ public class Version
         return versions.ToArray();
     }
     
-    public static async Task<Version> GetVersion(string? product, string? branch = "us")
+    public static async Task<Version> GetVersion(CDN cdn, string? product, string? branch = "us")
     {
         var url = $@"http://us.patch.battle.net:1119/{product}/versions";
-        var data = await Utils.GetDataFromURL(url);
+        var data = await cdn.GetDataFromURL(url);
         
         if (data == null)
         {

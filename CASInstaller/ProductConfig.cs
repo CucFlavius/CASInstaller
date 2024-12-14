@@ -31,7 +31,7 @@ public class ProductConfig
         foreach (var cdnURL in hosts)
         {
             var url = $@"http://{cdnURL}/{cdn?.ConfigPath}/{key?.UrlString}";
-            var data = await Utils.GetDataFromURL(url);
+            var data = await cdn.GetDataFromURL(url);
             if (data == null) continue;
 
             var options = new JsonReaderOptions

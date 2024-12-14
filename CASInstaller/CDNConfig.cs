@@ -115,7 +115,7 @@ public struct CDNConfig
             foreach (var cdnURL in hosts)
             {
                 var url = $@"http://{cdnURL}/{cdn?.Path}/config/{key?.UrlString}";
-                var encryptedData = await Utils.GetDataFromURL(url);
+                var encryptedData = await cdn.GetDataFromURL(url);
                 if (encryptedData == null) continue;
                 byte[]? data;
                 if (ArmadilloCrypt.Instance == null)

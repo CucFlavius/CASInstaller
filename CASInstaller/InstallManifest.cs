@@ -87,7 +87,7 @@ public class InstallManifest
         foreach (var cdnURL in hosts)
         {
             var url = $@"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}";
-            var encryptedData = await Utils.GetDataFromURL(url);
+            var encryptedData = await cdn.GetDataFromURL(url);
             if (encryptedData == null) continue;
 
             byte[]? data;

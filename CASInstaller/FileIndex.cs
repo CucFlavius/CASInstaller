@@ -127,7 +127,7 @@ public struct FileIndex
             foreach (var cdnURL in hosts)
             {
                 var url = $@"http://{cdnURL}/{cdn?.Path}/{pathType}/{key?.UrlString}.index";
-                var data = await Utils.GetDataFromURL(url);
+                var data = await cdn.GetDataFromURL(url);
                 if (data == null) continue;
                 if (ArmadilloCrypt.Instance != null)
                 {

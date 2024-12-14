@@ -195,7 +195,7 @@ public class Encoding
                 throw new Exception("No hosts found for CDN.");
             foreach (var cdnURL in hosts)
             {
-                var encryptedData = await Utils.GetDataFromURL($"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}");
+                var encryptedData = await cdn.GetDataFromURL($"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}");
                 if (encodingSize != 0 && encodingSize != encryptedData?.Length || encryptedData == null)
                     continue;
 
