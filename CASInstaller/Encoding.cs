@@ -41,17 +41,17 @@ public class Encoding
         public uint stringIndex;
         public ulong compressedSize;
     }
-    
+
     private Encoding(byte[] data, bool parseTableB, bool checkStuff)
     {
         using var stream = new MemoryStream(data);
         using var br = new BinaryReader(stream);
-        
+
         var signature = br.ReadBytes(2);
         var signatureStr = System.Text.Encoding.UTF8.GetString(signature);
         if (signatureStr != "EN")
             throw new Exception("Error while parsing encoding file. Did BLTE header size change?");
-         
+
         version = br.ReadByte();
         hash_size_ckey = br.ReadByte();
         hash_size_ekey = br.ReadByte();
@@ -123,7 +123,7 @@ public class Encoding
             var remaining = 4096 - ((br.BaseStream.Position - tableAstart) % 4096);
             if (remaining > 0) { br.BaseStream.Position += remaining; }
         }
-        
+
         if (!parseTableB)
             return;
 
@@ -182,43 +182,27 @@ public class Encoding
         encodingESpec = new string(br.ReadChars(int.Parse(eespecSize.ToString())));
     }
 
-    public static async Task<Encoding> GetEncoding(CDN? cdn, Hash? key, int encodingSize = 0, bool parseTableB = false, bool checkStuff = false, bool encoded = true)
+    public static async Task<Encoding> GetEncoding(CDN cdn, Hash key, int encodingSize = 0, bool parseTableB = false, bool checkStuff = false, bool encoded = true)
     {
-        if (cdn == null || key == null)
+        if (key.IsEmpty())
             throw new Exception("CDN or key is null.");
-        
+
         BinaryReader bin;
         if (encoded)
         {
-            var hosts = cdn?.Hosts;
-            if (hosts == null)
-                throw new Exception("No hosts found for CDN.");
-            foreach (var cdnURL in hosts)
-            {
-                var encryptedData = await cdn.GetDataFromURL($"http://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}");
-                if (encodingSize != 0 && encodingSize != encryptedData?.Length || encryptedData == null)
-                    continue;
-
-                byte[]? data;
-                if (ArmadilloCrypt.Instance == null)
-                    data = encryptedData;
-                else
-                    data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-                if (data == null) continue;
-                
-                using var ms = new MemoryStream(data);
-                await using var blte = new BLTE.BLTEStream(ms, default);
-                using var fso = new MemoryStream();
-                await blte.CopyToAsync(fso);
-                return new Encoding(fso.ToArray(), parseTableB, checkStuff);
-            }
+            var data = await cdn.GetData(key);
+            using var ms = new MemoryStream(data);
+            await using var blte = new BLTE.BLTEStream(ms, default);
+            using var fso = new MemoryStream();
+            await blte.CopyToAsync(fso);
+            return new Encoding(fso.ToArray(), parseTableB, checkStuff);
         }
         else
         {
-            var data = await File.ReadAllBytesAsync(cdn?.Path);
+            var data = await File.ReadAllBytesAsync(cdn.Path);
             return new Encoding(data, parseTableB, checkStuff);
         }
-        
+
         throw new Exception("Failed to download encoding file.");
     }
 

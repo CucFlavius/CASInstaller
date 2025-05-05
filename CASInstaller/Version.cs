@@ -18,7 +18,7 @@ public class Version
     {
         Product = product;
         string?[] parts = data.Split('|');
-        
+
         Region = parts[0];
         BuildConfigHash = new Hash(parts[1]);
         CdnConfigHash = new Hash(parts[2]);
@@ -28,11 +28,12 @@ public class Version
         ProductConfigHash = new Hash(parts[6]);
     }
 
-    public static async Task<Version[]> GetAllVersions(CDN cdn, string? product)
+    public static async Task<Version[]> GetAllVersions(string? product)
     {
         var url = $@"http://us.patch.battle.net:1119/{product}/versions";
-        var data = await cdn.GetDataFromURL(url);
-        
+        var client = new HttpClient();
+        var data = await client.GetByteArrayAsync(url);
+
         if (data == null)
             throw new ArgumentNullException(nameof(data), "Downloaded data cannot be null.");
 
@@ -42,25 +43,26 @@ public class Version
         for (var index = 1; index < lines.Length; index++)  // Ignoring first line that has table headers
         {
             var line = lines[index];
-            
+
             // Skip comment lines that start with #
             if (line.StartsWith($"#") || string.IsNullOrEmpty(line))
             {
                 continue;
             }
-            
+
             var version = new Version(line, product);
             versions.Add(version);
         }
-        
+
         return versions.ToArray();
     }
-    
-    public static async Task<Version> GetVersion(CDN cdn, string? product, string? branch = "us")
+
+    public static async Task<Version> GetVersion(string? product, string? branch = "us")
     {
         var url = $@"http://us.patch.battle.net:1119/{product}/versions";
-        var data = await cdn.GetDataFromURL(url);
-        
+        var client = new HttpClient();
+        var data = await client.GetByteArrayAsync(url);
+
         if (data == null)
         {
             throw  new ArgumentNullException(nameof(data), "Downloaded data cannot be null.");
@@ -71,13 +73,13 @@ public class Version
         for (var index = 1; index < lines.Length; index++)  // Ignoring first line that has table headers
         {
             var line = lines[index];
-            
+
             // Skip comment lines that start with #
             if (line.StartsWith($"#"))
             {
                 continue;
             }
-            
+
             var version = new Version(line, product);
 
             if (version.Region == branch)
@@ -85,10 +87,10 @@ public class Version
                 return version;
             }
         }
-        
+
         throw new Exception("Version not found");
     }
-    
+
     public override string ToString()
     {
         var sb = new StringBuilder();

@@ -12,5 +12,6 @@ public partial class Product
         public string? OverrideCDNConfig { get; set; } = null;
         public string? OverrideBuildConfig { get; set; } = null;
         public string? OverrideHosts { get; set; } = null;
+        public string? LocalCDNPath { get; set; } = null;
     }
 }

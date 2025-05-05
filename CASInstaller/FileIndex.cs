@@ -22,12 +22,12 @@ public struct FileIndex
     {
         if (data.Length == 0)
             return;
-        
+
         using var stream = new MemoryStream(data);
         using var br = new BinaryReader(stream);
-        
+
         stream.Seek(-28, SeekOrigin.End);
-        
+
         toc_hash = br.ReadBytes(8);
         version = br.ReadByte(); if (version != 1) throw new InvalidDataException("ParseIndex -> version");
         _11 = br.ReadByte(); if (_11 != 0) throw new InvalidDataException("ParseIndex -> unk1");
@@ -39,14 +39,14 @@ public struct FileIndex
         checksumSize = br.ReadByte(); if (checksumSize != 8) throw new InvalidDataException("ParseIndex -> hashSize");
         numElements = br.ReadInt32(); if (numElements * (keySizeBytes + sizeBytes + offsetBytes) > stream.Length) throw new Exception("ParseIndex failed");
         footerChecksum = br.ReadBytes(checksumSize);
-        
+
         stream.Seek(0, SeekOrigin.Begin);
-        
+
         var indexBlockSize = 1024 * blockSizeKb;
         var recordSize = keySizeBytes + sizeBytes + offsetBytes;
         var recordsPerBlock = indexBlockSize / recordSize;
         var recordsRead = 0;
-        
+
         while (recordsRead != numElements)
         {
             var blockRecordsRead = 0;
@@ -55,7 +55,7 @@ public struct FileIndex
             {
                 var headerHash = new Hash(br.ReadBytes(keySizeBytes));
                 var entry = new IndexEntry(br, sizeBytes);
-                
+
                 Entries.Add(headerHash, entry);
 
                 blockRecordsRead++;
@@ -64,11 +64,11 @@ public struct FileIndex
             br.ReadBytes(indexBlockSize - (blockRecordsRead * recordSize));
         }
     }
-    
+
     public struct IndexEntry
     {
         public uint size;
-        
+
         public IndexEntry(BinaryReader br, byte sizeBytes)
         {
             if (sizeBytes == 4)
@@ -81,12 +81,12 @@ public struct FileIndex
             }
         }
     }
-    
+
     public static async Task<FileIndex[]> GetDataIndexes(Hash[] keys, CDN cdn, string pathType, string data_dir)
     {
         var indexes = new FileIndex[keys.Length];
         var tasks = new Task<FileIndex>[keys.Length];
-        
+
         for (var i = 0; i < keys.Length; i++)
         {
             var key = keys[i];
@@ -102,66 +102,32 @@ public struct FileIndex
 
         return indexes;
     }
-    
-    public static async Task<FileIndex> GetDataIndex(CDN? cdn, Hash? key, string pathType, string? data_dir)
+
+    public static async Task<FileIndex> GetDataIndex(CDN cdn, Hash key, string pathType, string? data_dir)
     {
-        if (cdn == null || key == null || data_dir == null)
+        if (key.IsEmpty() || data_dir == null)
             return new FileIndex([]);
-        
-        if (key?.KeyString == null)
+
+        if (key.KeyString == null)
             return new FileIndex([]);
-        
+
         var saveDir = Path.Combine(data_dir, "indices");
         var savePath = Path.Combine(saveDir, key + ".index");
-        
+
         if (File.Exists(savePath))
         {
             return new FileIndex(await File.ReadAllBytesAsync(savePath));
         }
         else
         {
-            var hosts = cdn?.Hosts;
-            if (hosts == null)
-                return new FileIndex([]);
-            
-            foreach (var cdnURL in hosts)
-            {
-                var url = $@"http://{cdnURL}/{cdn?.Path}/{pathType}/{key?.UrlString}.index";
-                var data = await cdn.GetDataFromURL(url);
-                if (data == null) continue;
-                if (ArmadilloCrypt.Instance != null)
-                {
-                    // Determine if the file is encrypted or not
-                    using var stream = new MemoryStream(data);
-                    using var br = new BinaryReader(stream);
+            var data = pathType == "data" ? await cdn.GetData(key) : await cdn.GetPatch(key);
 
-                    stream.Seek(-20, SeekOrigin.End);
+            if (!Directory.Exists(saveDir))
+                Directory.CreateDirectory(saveDir);
+            await File.WriteAllBytesAsync(savePath, data);
 
-                    var encrypted = false;
-                    var version = br.ReadByte();
-                    if (version != 1) encrypted = true;
-                    var unk1 = br.ReadByte();
-                    if (unk1 != 0) encrypted = true;
-                    var unk2 = br.ReadByte();
-                    if (unk2 != 0) encrypted = true;
-                    var blockSizeKb = br.ReadByte();
-                    if (blockSizeKb != 4) encrypted = true;
-
-                    if (encrypted)
-                    {
-                        data = ArmadilloCrypt.Instance.DecryptData(key, data);
-                    }
-                }
-                
-                if (!Directory.Exists(saveDir))
-                    Directory.CreateDirectory(saveDir);
-                await File.WriteAllBytesAsync(savePath, data);
-
-                return new FileIndex(data);
-            }
+            return new FileIndex(data);
         }
-
-        return new FileIndex([]);
     }
 
     public void Dump(string path)

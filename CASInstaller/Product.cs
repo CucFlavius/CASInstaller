@@ -7,118 +7,141 @@ namespace CASInstaller;
 
 public partial class Product
 {
-    private const string cache_dir = "cache";
+    const string cache_dir = "cache";
 
-    private readonly string? _product;
-    private readonly string? _branch;
-    private readonly InstallSettings _installSettings;
-    private string? _installPath;
-    private CDN? _cdn;
-    private Version? _version;
+    readonly string? _product;
+    readonly string? _branch;
+    readonly InstallSettings _installSettings;
+    string? _installPath;
+    CDN? _cdn;
+    Version? _version;
     public ProductConfig? _productConfig;
     public string? _game_dir;
     public string? _shared_game_dir;
     public string? _data_dir;
     public List<string>? _installTags;
-    private BuildConfig? _buildConfig;
-    private CDNConfig? _cdnConfig;
-    private FileIndex? _fileIndex;
-    private FileIndex? _patchFileIndex;
-    private ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? _archiveGroup;
-    private ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? _patchGroup;
-    private Encoding? _encoding;
-    private DownloadManifest? _download;
-    private InstallManifest? _install;
-    private Dictionary<byte, IDX>? idxMap;
-    private string? _gameDataDir;
-    private BuildInfo? _buildInfo;
-    private List<byte[][]>? segmentHeaderKeyList;
-    private Data? Working_Data { get; set; }
-    
-    public Product(string? product, string? branch = "us", InstallSettings installSettings = default!)
+    BuildConfig? _buildConfig;
+    CDNConfig? _cdnConfig;
+    FileIndex? _fileIndex;
+    FileIndex? _patchFileIndex;
+    ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? _archiveGroup;
+    ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? _patchGroup;
+    Encoding? _encoding;
+    DownloadManifest? _download;
+    InstallManifest? _install;
+    Dictionary<byte, IDX>? idxMap;
+    string? _gameDataDir;
+    BuildInfo? _buildInfo;
+    List<byte[][]>? segmentHeaderKeyList;
+    Data? Working_Data { get; set; }
+
+    public Product(string? product, string? branch = "us", InstallSettings installSettings = null!)
     {
         _product = product;
         _branch = branch;
         _installSettings = installSettings;
     }
-    
+
     public async Task Install(string installPath)
     {
         if (!Directory.Exists(cache_dir))
             Directory.CreateDirectory(cache_dir);
-        
+
         _installPath = installPath;
-        
+
         BLTE.BLTEStream.ThrowOnMissingDecryptionKey = false;
         KeyService.LoadKeys();
-        
-        _cdn = await CDN.GetCDN(_product, _branch);
-        if (_installSettings.OverrideHosts != null)
-            if (_cdn != null)
+
+        if (string.IsNullOrEmpty(_installSettings.LocalCDNPath))
+            _cdn = await CDNOnline.GetCDN(_product, _branch);
+        else
+            _cdn = new CDNLocal(_product, _installSettings.LocalCDNPath);
+
+        if (_cdn != null)
+        {
+            if (_installSettings.OverrideHosts != null)
                 _cdn.Hosts = _installSettings.OverrideHosts.Split(' ');
-        _cdn?.LogInfo();
-        
-        _version = await Version.GetVersion(_cdn, _product, _branch);
-        if (_installSettings.OverrideCDNConfig != null)
-            if (_version != null)
-                _version.CdnConfigHash = new Hash(_installSettings.OverrideCDNConfig);
-        if (_installSettings.OverrideBuildConfig != null)
-            if (_version != null)
-                _version.BuildConfigHash = new Hash(_installSettings.OverrideBuildConfig);
-        _version?.LogInfo();
-        
-        _productConfig = await ProductConfig.GetProductConfig(_cdn, _version?.ProductConfigHash);
-        _productConfig?.Dump("productConfig.json");
-        ProcessProductConfig(_productConfig, _installPath);
-        
-        if (!string.IsNullOrEmpty(_productConfig?.all.config.decryption_key_name))
-            ArmadilloCrypt.Init(_productConfig.all.config.decryption_key_name);
-        
-        _buildConfig = await BuildConfig.GetBuildConfig(_cdn, _version?.BuildConfigHash, _data_dir);
-        _buildConfig?.LogInfo();
-        
-        _cdnConfig = await CDNConfig.GetConfig(_cdn, _version?.CdnConfigHash, _data_dir);
-        _cdnConfig?.LogInfo();
-        
-        _fileIndex = await FileIndex.GetDataIndex(_cdn, _cdnConfig?.FileIndex, "data", _data_dir);
-        _fileIndex?.Dump("fileindex.txt");
-        
-        _patchFileIndex = FileIndex.GetDataIndex(_cdn, _cdnConfig?.PatchFileIndex, "patch", _data_dir).Result;
-        _patchFileIndex?.Dump("patchfileindex.txt");
-        
-        _archiveGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.Archives, _cdnConfig?.ArchiveGroup, _data_dir, "data", 6);
-        _patchGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig?.PatchArchives, _cdnConfig?.PatchArchiveGroup, _data_dir, "patch", 5);
-        
-        _encoding = await Encoding.GetEncoding(_cdn, _buildConfig?.Encoding[1], 0, true);
-        _encoding?.LogInfo();
-        _encoding?.Dump("encoding.txt");
-        
-        _download = await DownloadManifest.GetDownload(_cdn, _buildConfig?.Download[1]);
-        _download?.LogInfo();
+            _cdn.LogInfo();
 
-        _install = await InstallManifest.GetInstall(_cdn, _buildConfig?.Install[1]);
-        _install?.Dump("install.txt");
-        _install?.LogInfo();
-        
-        // Download data //
-        _gameDataDir = Path.Combine(_data_dir ?? "", "data");
-        if (!Directory.Exists(_gameDataDir))
-            Directory.CreateDirectory(_gameDataDir);
-        
-        BuildIDXMap(_gameDataDir);
-        
-        await DownloadAndWriteFile((Hash)_buildConfig?.Download[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.DownloadSize[1]!));
-        await DownloadAndWriteFile((Hash)_buildConfig?.Install[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.InstallSize[1]!));
-        await DownloadAndWriteFile((Hash)_buildConfig?.Encoding[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.EncodingSize[1]!));
-        await DownloadAndWriteFile((Hash)_buildConfig?.Size[1]!, _cdn, _cdnConfig, _archiveGroup, (ulong)int.Parse(_buildConfig?.SizeSize[1]!));
-        
-        await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags, _data_dir);
-        await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
+            _version = await Version.GetVersion(_product, _branch);
+            if (_version == null)
+            {
+                AnsiConsole.MarkupLine($"[red]Version not found for product: {_product} branch: {_branch}[/]");
+                return;
+            }
 
-        Working_Data?.Finalize(_gameDataDir, idxMap!);
+            if (_installSettings.OverrideCDNConfig != null)
+                    _version.CdnConfigHash = new Hash(_installSettings.OverrideCDNConfig);
+            if (_installSettings.OverrideBuildConfig != null)
+                    _version.BuildConfigHash = new Hash(_installSettings.OverrideBuildConfig);
+            //_version?.LogInfo();
+
+            _productConfig = await ProductConfig.GetProductConfig(_cdn, _version.ProductConfigHash);
+            _productConfig?.Dump("productConfig.json");
+            ProcessProductConfig(_productConfig, _installPath);
+
+            if (!string.IsNullOrEmpty(_productConfig?.all.config.decryption_key_name))
+                ArmadilloCrypt.Init(_productConfig.all.config.decryption_key_name);
+
+            _buildConfig = await BuildConfig.GetBuildConfig(_cdn, _version.BuildConfigHash, _data_dir);
+            //_buildConfig?.LogInfo();
+
+            _cdnConfig = await CDNConfig.GetConfig(_cdn, _version.CdnConfigHash, _data_dir);
+            //_cdnConfig?.LogInfo();
+
+            if (_cdnConfig != null)
+            {
+                _fileIndex = await FileIndex.GetDataIndex(_cdn, _cdnConfig.Value.FileIndex, "data", _data_dir);
+                //_fileIndex?.Dump("fileindex.txt");
+
+                _patchFileIndex = FileIndex.GetDataIndex(_cdn, _cdnConfig.Value.PatchFileIndex, "patch", _data_dir).Result;
+                //_patchFileIndex?.Dump("patchfileindex.txt");
+
+                _archiveGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig.Value.Archives, _cdnConfig.Value.ArchiveGroup,
+                    _data_dir, "data", 6);
+                _patchGroup = await ProcessIndices(_cdn, _cdnConfig, _cdnConfig.Value.PatchArchives,
+                    _cdnConfig.Value.PatchArchiveGroup, _data_dir, "patch", 5);
+            }
+
+            if (_buildConfig != null)
+            {
+                _encoding = await Encoding.GetEncoding(_cdn, _buildConfig.Value.Encoding[1], 0, true);
+                //_encoding?.LogInfo();
+                //_encoding?.Dump("encoding.txt");
+
+                _download = await DownloadManifest.GetDownload(_cdn, _buildConfig.Value.Download[1]);
+                //_download?.LogInfo();
+
+                _install = await InstallManifest.GetInstall(_cdn, _buildConfig.Value.Install[1]);
+                _install?.Dump("install.txt");
+                //_install?.LogInfo();
+            }
+
+            // Download data //
+            _gameDataDir = Path.Combine(_data_dir ?? "", "data");
+            if (!Directory.Exists(_gameDataDir))
+                Directory.CreateDirectory(_gameDataDir);
+
+            BuildIDXMap(_gameDataDir);
+
+            await DownloadAndWriteFile((Hash)_buildConfig?.Download[1]!, _cdn, _cdnConfig, _archiveGroup,
+                (ulong)int.Parse(_buildConfig?.DownloadSize[1]!));
+            await DownloadAndWriteFile((Hash)_buildConfig?.Install[1]!, _cdn, _cdnConfig, _archiveGroup,
+                (ulong)int.Parse(_buildConfig?.InstallSize[1]!));
+            await DownloadAndWriteFile((Hash)_buildConfig?.Encoding[1]!, _cdn, _cdnConfig, _archiveGroup,
+                (ulong)int.Parse(_buildConfig?.EncodingSize[1]!));
+            await DownloadAndWriteFile((Hash)_buildConfig?.Size[1]!, _cdn, _cdnConfig, _archiveGroup,
+                (ulong)int.Parse(_buildConfig?.SizeSize[1]!));
+
+            await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags,
+                _data_dir);
+            await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
+        }
+
+        if (_gameDataDir != null) Working_Data?.Finalize(_gameDataDir, idxMap!);
 
         WriteIDXMap();
-        
+
         if (_installSettings.CreateProductDB)
             WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
         if (_installSettings.CreatePatchResult)
@@ -131,11 +154,11 @@ public partial class Product
             WriteFlavorInfo(_shared_game_dir, _version);
     }
 
-    private void ProcessProductConfig(ProductConfig? productConfig, string installPath)
+    void ProcessProductConfig(ProductConfig? productConfig, string installPath)
     {
         if (productConfig == null)
             return;
-        
+
         var tags = productConfig.platform.win.config?.tags;
         var tags_64bit = productConfig.platform.win.config?.tags_64bit;
         _installTags ??= [];
@@ -143,7 +166,7 @@ public partial class Product
             _installTags.AddRange(tags);
         if (tags_64bit != null)
             _installTags.AddRange(tags_64bit);
-        
+
         if (productConfig.all?.config?.form?.game_dir?.dirname != null)
             _game_dir = Path.Combine(installPath, productConfig.all.config.form.game_dir.dirname);
         if (!Directory.Exists(_game_dir))
@@ -154,7 +177,7 @@ public partial class Product
             _shared_game_dir = _game_dir;
         if (!Directory.Exists(_shared_game_dir))
             Directory.CreateDirectory(_shared_game_dir!);
-        
+
         if (productConfig?.all?.config?.data_dir != null)
             _data_dir = Path.Combine(_game_dir!, productConfig.all.config.data_dir);
         if (!Directory.Exists(_data_dir))
@@ -162,22 +185,22 @@ public partial class Product
     }
 
     private static async Task<ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>?> ProcessIndices(
-        CDN? cdn, CDNConfig? cdnConfig, Hash[]? indices, Hash? groupKey, string? data_dir,
+        CDN? cdn, CDNConfig? cdnConfig, Hash[]? indices, Hash groupKey, string? data_dir,
         string pathType, byte offsetBytes, bool overrideGroup = false)
     {
-        if (cdn == null || cdnConfig == null || groupKey == null)
+        if (cdn == null || cdnConfig == null || groupKey.IsEmpty())
             return null;
-        
+
         var indexGroup = new ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>();
 
         var saveDir = Path.Combine(data_dir ?? "", "indices");
-        var groupPath = Path.Combine(saveDir, groupKey?.KeyString + ".index");
+        var groupPath = Path.Combine(saveDir, groupKey.KeyString + ".index");
 
         if (File.Exists(groupPath) && !overrideGroup)
         {
             // Load existing archive group index
             _ = await ArchiveIndex.GetDataIndex(cdn, groupKey, pathType, data_dir, indexGroup, (ushort)0);
-            AnsiConsole.WriteLine(indexGroup.Count);
+            //AnsiConsole.WriteLine(indexGroup.Count);
         }
         else
         {
@@ -189,13 +212,13 @@ public partial class Product
                 task1.MaxValue = length;
                 Parallel.For(0, length, i =>
                 {
-                    var indexKey = indices?[i];
+                    var indexKey = indices[i];
                     task1.Increment(1);
                     _ = ArchiveIndex.GetDataIndex(cdn, indexKey, pathType, data_dir, indexGroup, (ushort)i).Result;
                 });
-                
+
             });
-            
+
             // Save the archive group index
             if (data_dir != null)
                 ArchiveIndex.GenerateIndexGroupFile(indexGroup, groupPath, offsetBytes);
@@ -203,7 +226,7 @@ public partial class Product
 
         return indexGroup;
     }
-    
+
     private static async Task ProcessInstall(
         InstallManifest? install, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags,
@@ -211,10 +234,10 @@ public partial class Product
     {
         if (install == null || cdn == null || encoding == null || shared_game_dir == null)
             return;
-        
+
         tags ??= [];
         tags.Add("enUS");
-        
+
         // Filter entries by tags
         var tagFilteredEntries = new List<InstallManifest.InstallFileEntry>();
         var tagIndexMap = new Dictionary<string, int>();
@@ -240,7 +263,7 @@ public partial class Product
             if (checksOut)
                 tagFilteredEntries.Add(entry);
         }
-        
+
         //Parallel.ForEach(tagFilteredEntries, async void (installEntry) =>
         foreach (var installEntry in tagFilteredEntries)
         {
@@ -248,12 +271,12 @@ public partial class Product
             var key = contentEntry.eKeys[0];
 
             var filePath = Path.Combine(shared_game_dir, installEntry.name);
-            
+
             if (File.Exists(filePath) && !overrideFiles)
                 continue;
 
             byte[]? data = null;
-            
+
             if (archiveGroup != null && archiveGroup.TryGetValue(key, out var indexEntry))
             {
                 try
@@ -274,9 +297,9 @@ public partial class Product
             {
                 data = await Data.DownloadFileDirectly(key, cdn);
             }
-            
+
             if (data == null) continue;
-            
+
             try
             {
                 // Decode BLTE, install files must be extracted
@@ -290,7 +313,7 @@ public partial class Product
             {
                 AnsiConsole.WriteException(e);
             }
-            
+
             var dirPath = Path.GetDirectoryName(filePath) ?? "";
             if (!Directory.Exists(dirPath))
                 Directory.CreateDirectory(dirPath);
@@ -298,7 +321,7 @@ public partial class Product
             await File.WriteAllBytesAsync(filePath, data);
         }
     }
-    
+
     private async Task ProcessDownload(
         DownloadManifest? download, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup,
@@ -309,7 +332,7 @@ public partial class Product
             return;
 
         tags ??= [];
-        
+
         // Add locale tags
         tags.Add("enUS");
 
@@ -321,11 +344,11 @@ public partial class Product
         {
             tagIndexMap[download.tags[i].name] = i;
         }
-        
+
         foreach (var entry in download.entries)
         {
             var checksOut = true;
-            
+
             foreach (var tag in tags)
             {
                 if (tagIndexMap.TryGetValue(tag, out var tagIndex))
@@ -347,7 +370,7 @@ public partial class Product
             var length = tagFilteredEntries?.Count ?? 0;
             var task1 = ctx.AddTask($"[green]Processing {length} download entries[/]");
             task1.MaxValue = length;
-            
+
             foreach (var downloadEntry in tagFilteredEntries)
             {
                 task1.Increment(1);
@@ -376,7 +399,7 @@ public partial class Product
     {
         if (idxMap == null)
             throw new NullReferenceException("idxMap");
-        
+
         // Add idx entries for every segment header Meta in every data file
         for (var d = 0; d < segmentHeaderKeyList.Count; d++)
         {
@@ -408,7 +431,7 @@ public partial class Product
 
         if (_gameDataDir == null)
             throw new NullReferenceException("_gameDataDir");
-        
+
         if (idxMap == null)
             throw new NullReferenceException("idxMap");
 
@@ -519,7 +542,7 @@ public partial class Product
             Hidden = false,
             PersistentJsonStorage = @"{\u0022user_install_package_settings\u0022:[]}"
         };
-        
+
         if (gameDir == null)
             return;
 
@@ -527,11 +550,11 @@ public partial class Product
         var path = Path.Combine(gameDir, ".product.db");
         if (File.Exists(path))
             File.SetAttributes(path, FileAttributes.None);
-            
+
         File.WriteAllBytes(path, data);
         File.SetAttributes(path, FileAttributes.Hidden);
     }
-    
+
     private void WritePatchResult(string? gameDir)
     {
         if (gameDir == null)
@@ -545,28 +568,28 @@ public partial class Product
         File.WriteAllBytes(path, data);
         File.SetAttributes(path, FileAttributes.Hidden);
     }
-    
+
     private void WriteLauncherDB(string? gameDir)
     {
         if (gameDir == null)
             return;
-        
+
         var path = Path.Combine(gameDir, "Launcher.db");
         if (File.Exists(path))
             File.SetAttributes(path, FileAttributes.None);
-        
+
         var data = "enUS"u8.ToArray();
         File.WriteAllBytes(path, data);
         File.SetAttributes(path, FileAttributes.Hidden);
     }
-    
+
     private void WriteBuildInfo(string? gameDir)
     {
         if (gameDir == null)
             return;
-        
+
         var path = Path.Combine(gameDir, ".build.info");
-            
+
         _buildInfo = new BuildInfo(path);
         var build = new BuildInfo.Build
         {
@@ -590,7 +613,7 @@ public partial class Product
         _buildInfo.AddBuild(build);
         _buildInfo.Write(path);
     }
-    
+
     private void WriteFlavorInfo(string? shared_game_dir, Version? version)
     {
         if (shared_game_dir == null)

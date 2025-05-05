@@ -171,45 +171,28 @@ public struct BuildConfig
             }
         }
     }
-    
-    public static async Task<BuildConfig> GetBuildConfig(CDN? cdn, Hash? key, string? data_dir)
+
+    public static async Task<BuildConfig> GetBuildConfig(CDN? cdn, Hash key, string? data_dir)
     {
-        if (cdn == null || key == null) return new BuildConfig();
-        
-        var saveDir = Path.Combine(data_dir ?? "", "config", key?.KeyString?[0..2] ?? "", key?.KeyString?[2..4] ?? "");
-        var savePath = Path.Combine(saveDir, key?.KeyString ?? "");
-        
+        if (cdn == null || key.IsEmpty()) return new BuildConfig();
+
+        var saveDir = Path.Combine(data_dir ?? "", "config", key.KeyString?[0..2] ?? "", key.KeyString?[2..4] ?? "");
+        var savePath = Path.Combine(saveDir, key.KeyString ?? "");
+
         if (File.Exists(savePath))
         {
             return new BuildConfig(await File.ReadAllBytesAsync(savePath));
         }
         else
         {
-            var hosts = cdn?.Hosts;
-            if (hosts == null) return new BuildConfig();
-            
-            foreach (var cdnURL in hosts)
+            var data = await cdn.GetCDNConfig(key);
+            if (data == null)
             {
-                var url = $@"http://{cdnURL}/{cdn?.Path}/config/{key?.UrlString}";
-                var encryptedData = await cdn.GetDataFromURL(url);
-                if (encryptedData == null) continue;
-                byte[] data;
-                if (ArmadilloCrypt.Instance == null)
-                    data = encryptedData;
-                else
-                    data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-
-                if (data == null) continue;
-
-                if (data_dir != null)
-                {
-                    if (!Directory.Exists(saveDir))
-                        Directory.CreateDirectory(saveDir);
-                    await File.WriteAllBytesAsync(savePath, data);
-                }
-
-                return new BuildConfig(data);
+                AnsiConsole.MarkupLine($"[bold red]Failed to download build config:[/] {key}");
+                return new BuildConfig();
             }
+
+            return new BuildConfig(data);
         }
 
         return new BuildConfig();

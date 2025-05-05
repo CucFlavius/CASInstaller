@@ -10,6 +10,7 @@ internal abstract class Program
         string? _overrideCdnConfig = null;
         string? _overrideBuildConfig = null;
         string? _overrideHosts = null;
+        string? _localCdnPath = null;
 
         if (args.Length == 0)
         {
@@ -49,6 +50,9 @@ internal abstract class Program
                 case "--override-hosts":
                     _overrideHosts = args[++i];
                     break;
+                case "--local-cdn-path":
+                    _localCdnPath = args[++i];
+                    break;
             }
         }
 
@@ -60,7 +64,7 @@ internal abstract class Program
 
         _installPath ??= "";
         _branch ??= "us";
-        
+
         // Install the game
         var game_settings = new Product.InstallSettings()
         {
@@ -72,10 +76,11 @@ internal abstract class Program
             OverrideCDNConfig = _overrideCdnConfig,
             OverrideBuildConfig = _overrideBuildConfig,
             OverrideHosts = _overrideHosts,
+            LocalCDNPath = _localCdnPath,
         };
         var game = new Product(_product, _branch, game_settings);
         await game.Install(_installPath);
-        
+
         // Install the bootstrapper (Launcher)
         var product_tag = game._productConfig?.all.config.launcher_install_info.product_tag ?? "wow";
         var bootstrapper_product = game._productConfig?.all.config.launcher_install_info.bootstrapper_product ?? "bts";

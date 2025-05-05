@@ -8,7 +8,7 @@ public struct CDNConfig
     public readonly Hash[]? Archives;
     public readonly int[]? ArchivesIndexSize;
     public Hash ArchiveGroup;
-    
+
     public readonly Hash[]? PatchArchives;
     public readonly int[]? PatchArchivesIndexSize;
     public Hash PatchArchiveGroup;
@@ -18,22 +18,22 @@ public struct CDNConfig
 
     public Hash PatchFileIndex;
     public int PatchFileIndexSize;
-    
+
     public CDNConfig(string data)
     {
         if (string.IsNullOrEmpty(data))
             return;
-        
+
         var lines = data.Split('\n');
 
         foreach (var line in lines)
         {
             if (string.IsNullOrEmpty(line))
                 continue;
-            
+
             if (line.StartsWith('#'))
                 continue;
-            
+
             string?[] parts = line.Split(" = ");
             var key = parts[0];
             var value = parts[1];
@@ -93,14 +93,14 @@ public struct CDNConfig
             }
         }
     }
-    
-    public static async Task<CDNConfig> GetConfig(CDN? cdn, Hash? key, string? data_dir)
+
+    public static async Task<CDNConfig> GetConfig(CDN cdn, Hash key, string? data_dir)
     {
-        if (cdn == null || key == null) return new CDNConfig(string.Empty);
-        
-        var saveDir = Path.Combine(data_dir ?? "", "config", key?.KeyString?[0..2] ?? "", key?.KeyString?[2..4] ?? "");
-        var savePath = Path.Combine(saveDir, key?.KeyString ?? "");
-        
+        if (key.IsEmpty()) return new CDNConfig(string.Empty);
+
+        var saveDir = Path.Combine(data_dir ?? "", "config", key.KeyString?[0..2] ?? "", key.KeyString?[2..4] ?? "");
+        var savePath = Path.Combine(saveDir, key.KeyString ?? "");
+
         if (File.Exists(savePath))
         {
             var data = await File.ReadAllBytesAsync(savePath);
@@ -109,36 +109,20 @@ public struct CDNConfig
         }
         else
         {
-            var hosts = cdn?.Hosts;
-            if (hosts == null) return new CDNConfig(string.Empty);
-            
-            foreach (var cdnURL in hosts)
+            var data = await cdn.GetConfig(key);
+
+            if (data_dir != null)
             {
-                var url = $@"http://{cdnURL}/{cdn?.Path}/config/{key?.UrlString}";
-                var encryptedData = await cdn.GetDataFromURL(url);
-                if (encryptedData == null) continue;
-                byte[]? data;
-                if (ArmadilloCrypt.Instance == null)
-                    data = encryptedData;
-                else
-                    data = ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-                if (data == null) continue;
-
-                if (data_dir != null)
-                {
-                    if (!Directory.Exists(saveDir))
-                        Directory.CreateDirectory(saveDir);
-                    await File.WriteAllBytesAsync(savePath, data);
-                }
-
-                var stringData = System.Text.Encoding.UTF8.GetString(data);
-                return new CDNConfig(stringData);
+                if (!Directory.Exists(saveDir))
+                    Directory.CreateDirectory(saveDir);
+                await File.WriteAllBytesAsync(savePath, data);
             }
-        }
 
-        return new CDNConfig(string.Empty);
+            var stringData = System.Text.Encoding.UTF8.GetString(data);
+            return new CDNConfig(stringData);
+        }
     }
-    
+
     public override string ToString()
     {
         var sb = new StringBuilder();

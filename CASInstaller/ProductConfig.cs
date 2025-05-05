@@ -21,40 +21,31 @@ public class ProductConfig
     public Zhcn zhcn { get; set; }
     public Zhtw zhtw { get; set; }
 
-    public static async Task<ProductConfig?> GetProductConfig(CDN? cdn, Hash? key)
+    public static async Task<ProductConfig?> GetProductConfig(CDN cdn, Hash key)
     {
-        if (cdn?.Hosts == null || key == null) return null;
+        if (cdn.Hosts == null || key.IsEmpty()) return null;
 
-        var hosts = cdn?.Hosts;
+        var hosts = cdn.Hosts;
         if (hosts == null) return null;
-        
-        foreach (var cdnURL in hosts)
+
+        var data = await cdn.GetCDNConfig(key);
+
+        var options = new JsonReaderOptions
         {
-            var url = $@"http://{cdnURL}/{cdn?.ConfigPath}/{key?.UrlString}";
-            var data = await cdn.GetDataFromURL(url);
-            if (data == null) continue;
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        };
 
-            var options = new JsonReaderOptions
-            {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip
-            };
-
-            var reader = new Utf8JsonReader(data, options);
-            var productConfig = JsonSerializer.Deserialize<ProductConfig>(ref reader);
-            
-            return productConfig;
-        }
-
-        return null;
+        var reader = new Utf8JsonReader(data, options);
+        return JsonSerializer.Deserialize<ProductConfig>(ref reader);
     }
-    
+
     public void Dump(string productconfigJson)
     {
         var reserialized = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(productconfigJson, reserialized);
     }
-        
+
     public class All
     {
         public Config config { get; set; }

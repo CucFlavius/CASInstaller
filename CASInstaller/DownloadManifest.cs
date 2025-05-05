@@ -12,30 +12,30 @@ public class DownloadManifest
     private readonly ushort m_numTags;
     private readonly byte m_numFlagsSize;
     public byte m_priorityBias;
-    
+
     public readonly DownloadEntry[] entries;
     public readonly TagInfo[] tags;
 
     private DownloadManifest(byte[] data)
     {
         var mSize = data.Length;
-        
+
         if (mSize <= 10)
             throw new Exception($"Detected truncated download manifest. Only got {mSize} bytes, but minimum header size is 10 bytes.");
-        
+
         using var ms = new MemoryStream(data);
         using var br = new BinaryReader(ms);
-        
+
         var magicBytes = br.ReadBytes(2);
         var magicString = System.Text.Encoding.UTF8.GetString(magicBytes);
         if (magicString != "DL")
             throw new Exception("Invalid magic string in download manifest.");
 
         m_version = br.ReadByte();
-        
+
         if (m_version > 2)
             throw new Exception($"Unsupported install manifest version: {m_version}. This client only supports non-zero versions <= 2");
-        
+
         m_eKeySize = br.ReadByte();
         m_checkSumTypeConstant = br.ReadByte() != 0;
         m_numEntries = br.ReadUInt32(true);
@@ -57,7 +57,7 @@ public class DownloadManifest
         }
 
         entries = new DownloadEntry[m_numEntries];
-        
+
         for (var i = 0; i < m_numEntries; i++)
         {
             entries[i] = new DownloadEntry(br, m_eKeySize, m_checkSumTypeConstant, m_numFlagsSize);
@@ -65,7 +65,7 @@ public class DownloadManifest
 
         tags = new TagInfo[m_numTags];
         var bytesPerTag = ((int)m_numEntries + 7) / 8;
-        
+
         for (var i = 0; i < m_numTags; i++)
         {
             tags[i] = new TagInfo(br, bytesPerTag);
@@ -84,7 +84,7 @@ public class DownloadManifest
             }
         }
     }
-    
+
     public class DownloadEntry
     {
         public Hash eKey;
@@ -93,13 +93,13 @@ public class DownloadManifest
         private readonly uint checksum;
         private readonly byte flags;
         public int tagIndices;
-        
+
         public DownloadEntry(BinaryReader br, byte checksumSize, bool hasChecksumInEntry, byte flagSize)
         {
             eKey = new Hash(br.ReadBytes(checksumSize));
             size = br.ReadUInt40(true);
             priority = br.ReadSByte();
-            
+
             if (hasChecksumInEntry)
             {
                 checksum = br.ReadUInt32(true);
@@ -127,30 +127,21 @@ public class DownloadManifest
             return sb.ToString();
         }
     }
-    
-    public static async Task<DownloadManifest?> GetDownload(CDN? cdn, Hash? key)
+
+    public static async Task<DownloadManifest?> GetDownload(CDN cdn, Hash key)
     {
-        var hosts = cdn?.Hosts;
-        if (hosts == null)
-            throw new Exception("No hosts found for CDN.");
-        foreach (var cdnURL in hosts)
-        {
-            var url = $@"https://{cdnURL}/{cdn?.Path}/data/{key?.UrlString}";
-            var encryptedData = await cdn.GetDataFromURL(url);
-            if (encryptedData == null) continue;
+        var encryptedData = await cdn.GetData(key);
+        if (encryptedData == null) return null;
 
-            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance.DecryptData(key, encryptedData);
+        var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance.DecryptData(key, encryptedData);
 
-            using var ms = new MemoryStream(data);
-            await using var blte = new BLTE.BLTEStream(ms, default);
-            using var fso = new MemoryStream();
-            await blte.CopyToAsync(fso);
-            data = fso.ToArray();
-            
-            return new DownloadManifest(data);
-        }
+        using var ms = new MemoryStream(data);
+        await using var blte = new BLTE.BLTEStream(ms, default);
+        using var fso = new MemoryStream();
+        await blte.CopyToAsync(fso);
+        data = fso.ToArray();
 
-        return null;
+        return new DownloadManifest(data);
     }
 
     public override string ToString()
