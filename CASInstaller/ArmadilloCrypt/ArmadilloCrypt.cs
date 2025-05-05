@@ -108,18 +108,18 @@ public class ArmadilloCrypt
         using var decryptor = KeyService.SalsaInstance.CreateDecryptor(_key, IV);
         using var cs = new CryptoStream(stream, decryptor, CryptoStreamMode.Read);
         using var ms = cs.CopyToMemoryStream();
-        return ms.ToArray(); 
+        return ms.ToArray();
     }
-    
-    public byte[] DecryptData(Hash? key, byte[]? encryptedData)
+
+    public byte[] DecryptData(Hash key, byte[]? encryptedData)
     {
-        if (key == null)
+        if (key.IsEmpty())
             throw new ArgumentNullException(nameof(key));
-        
+
         if (encryptedData == null)
             throw new ArgumentNullException(nameof(encryptedData));
-        
-        var iv = key?.Key[8..];
+
+        var iv = key.Key[8..];
 
         using var stream = new MemoryStream(encryptedData);
         using var decryptor = KeyService.SalsaInstance.CreateDecryptor(_key, iv);
@@ -184,7 +184,7 @@ public class ArmadilloCrypt
     {
         crypt = new(keyName);
     }
-    
+
     private static byte[] ReadStreamToByteArray(Stream stream)
     {
         using (var ms = new MemoryStream())

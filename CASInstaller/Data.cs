@@ -85,17 +85,17 @@ public class Data
         if (data == null) return;
 
         // Ensure we're not overwriting stream position by reusing the BinaryWriter
-        await using var bws = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        var header = new CasReconstructionHeader()
-        {
-            BLTEHash = key.Key.Reverse().ToArray(),
-            size = idxEntry.Size,
-            channel = casIndexChannel.Data,
-        };
-
-        bws.Seek(offset, SeekOrigin.Begin);
-        header.Write(bws, (ushort)archiveID, (uint)offset);
-        bws.Write(data);
+        // await using var bws = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        // var header = new CasReconstructionHeader()
+        // {
+        //     BLTEHash = key.Key.Reverse().ToArray(),
+        //     size = idxEntry.Size,
+        //     channel = casIndexChannel.Data,
+        // };
+        //
+        // bws.Seek(offset, SeekOrigin.Begin);
+        // header.Write(bws, (ushort)archiveID, (uint)offset);
+        // bws.Write(data);
     }
 
     public static async Task<byte[]?> DownloadFileFromIndex(ArchiveIndex.IndexEntry indexEntry, CDN? cdn, CDNConfig? cdnConfig)
@@ -123,9 +123,20 @@ public class Data
 
     public static async Task<byte[]?> DownloadFileDirectly(Hash key, CDN? cdn)
     {
-        var hosts = cdn?.Hosts;
-        if (hosts == null) return null;
-        return await cdn.GetData(key);
+        var dataFilePath = Path.Combine(cache_dir, $"{key.KeyString!}.data");
+        if (File.Exists(dataFilePath))
+        {
+            return await File.ReadAllBytesAsync(dataFilePath);
+        }
+        else
+        {
+            var decryptedData = await cdn.GetData(key);
+
+            // Cache
+            await File.WriteAllBytesAsync(dataFilePath, decryptedData);
+
+            return decryptedData;
+        }
     }
 
     public static byte cascGetBucketIndex(Hash key)

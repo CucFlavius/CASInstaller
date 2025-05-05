@@ -9,8 +9,8 @@ public partial class Product
 {
     const string cache_dir = "cache";
 
-    readonly string? _product;
-    readonly string? _branch;
+    readonly string _product;
+    readonly string _branch;
     readonly InstallSettings _installSettings;
     string? _installPath;
     CDN? _cdn;
@@ -35,7 +35,7 @@ public partial class Product
     List<byte[][]>? segmentHeaderKeyList;
     Data? Working_Data { get; set; }
 
-    public Product(string? product, string? branch = "us", InstallSettings installSettings = null!)
+    public Product(string product, string branch = "us", InstallSettings installSettings = null!)
     {
         _product = product;
         _branch = branch;
@@ -424,7 +424,7 @@ public partial class Product
         }
     }
 
-    private async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size)
+    async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size)
     {
         var writeSize = size + 30;
         var bucket = Data.cascGetBucketIndex(eKey);

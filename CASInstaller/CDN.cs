@@ -24,7 +24,6 @@ public abstract class CDN
     public abstract Task<byte[]?> GetData(Hash key, int start, int size);
     public abstract Task<byte[]> GetPatch(Hash key);
 
-
     public override string ToString()
     {
         var sb = new StringBuilder();
