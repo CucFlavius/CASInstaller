@@ -138,7 +138,7 @@ public partial class Product
             await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
         }
 
-        if (_gameDataDir != null) Working_Data?.Finalize(_gameDataDir, idxMap!);
+        if (_gameDataDir != null) Working_Data?.Finalize(_gameDataDir);
 
         WriteIDXMap();
 
@@ -322,7 +322,7 @@ public partial class Product
         }
     }
 
-    private async Task ProcessDownload(
+    async Task ProcessDownload(
         DownloadManifest? download, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? patchGroup, List<string>? tags,
@@ -383,7 +383,7 @@ public partial class Product
         AnsiConsole.MarkupLine($"[bold green]Total download size: {totalDownloadSize}[/]");
     }
 
-    private void BuildIDXMap(string dataDir)
+    void BuildIDXMap(string dataDir)
     {
         const byte idxN = 1;        // Only need to increase this number if we update the game
         idxMap = new Dictionary<byte, IDX>();
@@ -450,7 +450,7 @@ public partial class Product
             }
             else
             {
-                Working_Data.Finalize(_gameDataDir, idxMap!);
+                Working_Data.Finalize(_gameDataDir);
                 var currentID = Working_Data.ID;
                 Working_Data = new Data(currentID + 1, out var segmentHeaderKeys);
                 segmentHeaderKeyList.Add(segmentHeaderKeys);
@@ -459,7 +459,7 @@ public partial class Product
         }
     }
 
-    private void WriteProductDB(string? gameDir, Version? version, ProductConfig? productConfig, BuildConfig? buildConfig)
+    void WriteProductDB(string? gameDir, Version? version, ProductConfig? productConfig, BuildConfig? buildConfig)
     {
         var prod = new ProductInstall
         {

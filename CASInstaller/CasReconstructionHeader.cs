@@ -11,8 +11,8 @@ struct CasReconstructionHeader
     public byte[] BLTEHash;
     public uint size;
     public casIndexChannel channel;
-    private uint checksumA;
-    private uint checksumB;
+    uint checksumA;
+    uint checksumB;
 
     public void Write(BinaryWriter bw, ushort archiveIndex, uint archiveOffset)
     {
@@ -28,7 +28,7 @@ struct CasReconstructionHeader
         checksumA = HashAlgo.HashLittle(headerMs.ToArray(), 0x16, 0x3D6BE971);
         headerMs.Position = 0x16;
         headerBw.Write(checksumA);
-            
+
         headerBw.Flush();
         headerMs.Position = 0;
         checksumB = HashAlgo.CalculateChecksum(headerMs.ToArray(), archiveIndex, archiveOffset);

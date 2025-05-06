@@ -5,10 +5,11 @@ namespace CASInstaller;
 
 public class Data
 {
-    private const string cache_dir = "cache";
-    private const int DATA_TOTAL_SIZE_MAXIMUM = 1023 * 1024 * 1024;
+    const string cache_dir = "cache";
+    const int DATA_TOTAL_SIZE_MAXIMUM = 1023 * 1024 * 1024;
     public readonly int ID;
-    private readonly MemoryStream stream;
+    readonly MemoryStream stream;
+    readonly BinaryWriter writer;
 
     public Data(int ID, out byte[][] segmentHeaderKeys)
     {
@@ -17,9 +18,9 @@ public class Data
         // Initialize a new data file
         stream = new MemoryStream();
 
-        using var bw = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
 
-        segmentHeaderKeys = casReconstructionHeaderSerialize(bw, ID);  // Write the initial header
+        segmentHeaderKeys = casReconstructionHeaderSerialize(ID);  // Write the initial header
     }
 
     public long Offset => stream.Length;
@@ -29,7 +30,7 @@ public class Data
         return Offset + writeSize <= DATA_TOTAL_SIZE_MAXIMUM;
     }
 
-    private byte[][] casReconstructionHeaderSerialize(BinaryWriter bw, int dataNumber)
+    byte[][] casReconstructionHeaderSerialize(int dataNumber)
     {
         var container = new CasContainerIndex()
         {
@@ -44,14 +45,14 @@ public class Data
         {
             var reversedSegmentHeaderKey = SegmentHeaderKeys[i].Reverse().ToArray();
 
-            var header = new CasReconstructionHeader()
-            {
-                BLTEHash = reversedSegmentHeaderKey,
-                size = 30,
-                channel = casIndexChannel.Meta,
-            };
-            //header.Write(bw, (ushort)dataNumber, (uint)(i * 30));
-            bw.Write(new byte[30]);
+             var header = new CasReconstructionHeader()
+             {
+                 BLTEHash = reversedSegmentHeaderKey,
+                 size = 30,
+                 channel = casIndexChannel.Meta,
+             };
+            header.Write(writer, (ushort)dataNumber, (uint)(i * 30));
+            writer.Write(new byte[30]);
         }
 
         return SegmentHeaderKeys;
@@ -85,17 +86,17 @@ public class Data
         if (data == null) return;
 
         // Ensure we're not overwriting stream position by reusing the BinaryWriter
-        // await using var bws = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        // var header = new CasReconstructionHeader()
-        // {
-        //     BLTEHash = key.Key.Reverse().ToArray(),
-        //     size = idxEntry.Size,
-        //     channel = casIndexChannel.Data,
-        // };
-        //
-        // bws.Seek(offset, SeekOrigin.Begin);
-        // header.Write(bws, (ushort)archiveID, (uint)offset);
-        // bws.Write(data);
+        //await using var bws = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        var header = new CasReconstructionHeader()
+        {
+            BLTEHash = key.Key.Reverse().ToArray(),
+            size = idxEntry.Size,
+            channel = casIndexChannel.Data,
+        };
+
+        writer.Seek(offset, SeekOrigin.Begin);
+        header.Write(writer, (ushort)archiveID, (uint)offset);
+        writer.Write(data);
     }
 
     public static async Task<byte[]?> DownloadFileFromIndex(ArchiveIndex.IndexEntry indexEntry, CDN? cdn, CDNConfig? cdnConfig)
@@ -150,13 +151,15 @@ public class Data
         return (byte)((i & 0xf) ^ (i >> 4));
     }
 
-    public void Finalize(string gameDataDir, Dictionary<byte, IDX> idxMap)
+    public void Finalize(string gameDataDir)
     {
         var dataPath = Path.Combine(gameDataDir, $"data.{ID:D3}");
         var fileStream = File.Create(dataPath);
         stream.WriteTo(fileStream);
+        writer.Dispose();
         fileStream.Close();
         stream.SetLength(0);
         stream.Close();
+        stream.Dispose();
     }
 }
