@@ -32,6 +32,19 @@ public class ArmadilloCrypt
 
         key = null;
 
+        // If the key name is a 32-char hex string (16 bytes), treat it as the key directly
+        if (keyName.Length == 32)
+        {
+            try
+            {
+                key = keyName.FromHexString();
+                if (key.Length == 16)
+                    return true;
+                key = null;
+            }
+            catch { /* Not a valid hex string, fall through to file loading */ }
+        }
+
         if (!fi.Exists)
             return false;
 
@@ -40,19 +53,28 @@ public class ArmadilloCrypt
         if (fileData.Length < 4)
             return false;
 
-        // First 4 bytes are header, remaining bytes are the key
+        // File format: key bytes followed by 4-byte MD5 checksum
+        // Valid key lengths: 0, 16, or 32 bytes (total file: 4, 20, or 36 bytes)
         var keyLength = fileData.Length - 4;
 
         switch (keyLength)
         {
             case 0:
-                // Null key (no encryption)
                 key = null;
                 return true;
             case 16:
             case 32:
                 key = new byte[keyLength];
-                Array.Copy(fileData, 4, key, 0, keyLength);
+                Array.Copy(fileData, 0, key, 0, keyLength);
+
+                // Verify MD5 checksum (first 4 bytes of MD5 hash of key)
+                var md5 = MD5.HashData(key);
+                var expectedChecksum = BitConverter.ToInt32(fileData, keyLength);
+                var actualChecksum = BitConverter.ToInt32(md5, 0);
+                if (expectedChecksum != actualChecksum)
+                {
+                    Spectre.Console.AnsiConsole.MarkupLine("[yellow]Warning: Armadillo key file checksum mismatch[/]");
+                }
                 return true;
             default:
                 return false;
