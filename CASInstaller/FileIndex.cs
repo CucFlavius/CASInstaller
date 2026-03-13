@@ -54,7 +54,7 @@ public struct FileIndex
             for (var blockIndex = 0; blockIndex < recordsPerBlock && recordsRead < numElements; blockIndex++, recordsRead++)
             {
                 var headerHash = new Hash(br.ReadBytes(keySizeBytes));
-                var entry = new IndexEntry(br, sizeBytes);
+                var entry = new IndexEntry(br, offsetBytes, sizeBytes);
 
                 Entries.Add(headerHash, entry);
 
@@ -67,10 +67,19 @@ public struct FileIndex
 
     public struct IndexEntry
     {
+        public uint offset;
         public uint size;
 
-        public IndexEntry(BinaryReader br, byte sizeBytes)
+        public IndexEntry(BinaryReader br, byte offsetBytes, byte sizeBytes)
         {
+            // Read offset (big-endian) if present
+            offset = 0;
+            if (offsetBytes > 0)
+            {
+                for (int i = 0; i < offsetBytes; i++)
+                    offset = (offset << 8) | br.ReadByte();
+            }
+
             if (sizeBytes == 4)
             {
                 size = br.ReadUInt32(true);
@@ -120,7 +129,10 @@ public struct FileIndex
         }
         else
         {
-            var data = pathType == "data" ? await cdn.GetData(key) : await cdn.GetPatch(key);
+            var data = pathType == "data" ? await cdn.GetDataIndex(key) : await cdn.GetPatchIndex(key);
+
+            if (data == null)
+                return new FileIndex([]);
 
             if (!Directory.Exists(saveDir))
                 Directory.CreateDirectory(saveDir);

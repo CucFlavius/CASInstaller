@@ -141,9 +141,30 @@ public class BLTEStream : Stream
 
         long startPos = _stream.Position;
 
-        using (NestedStream ns = new NestedStream(_stream, block.CompSize, true))
+        if (_hasHeader && block.Hash.Key != null && !block.Hash.IsEmpty())
         {
-            HandleDataBlock(ns, _blocksIndex);
+            // Read block data, validate MD5, then process
+            byte[] blockData = new byte[block.CompSize];
+            _stream.ReadExactly(blockData, 0, block.CompSize);
+
+            byte[] hash = MD5.HashData(blockData);
+            if (!block.Hash.EqualsTo(hash))
+            {
+                Console.WriteLine($"WARNING: Block {_blocksIndex} MD5 mismatch");
+            }
+
+            using (MemoryStream blockStream = new MemoryStream(blockData))
+            using (NestedStream ns = new NestedStream(blockStream, block.CompSize, true))
+            {
+                HandleDataBlock(ns, _blocksIndex);
+            }
+        }
+        else
+        {
+            using (NestedStream ns = new NestedStream(_stream, block.CompSize, true))
+            {
+                HandleDataBlock(ns, _blocksIndex);
+            }
         }
 
         _stream.Position = startPos + block.CompSize;
@@ -169,7 +190,8 @@ public class BLTEStream : Stream
                     _memStream.Write(new byte[_dataBlocks[index].DecompSize], 0, _dataBlocks[index].DecompSize);
                 break;
             case 0x46: // F (frame, recursive)
-                throw new BLTEDecoderException(1, "DecoderFrame not implemented");
+                HandleFrameBlock(data);
+                break;
             case 0x4E: // N (not compressed)
                 data.CopyTo(_memStream);
                 break;
@@ -242,8 +264,16 @@ public class BLTEStream : Stream
             }
             else
             {
-                // ARC4 ?
-                throw new BLTEDecoderException(2, "encType ENCRYPTION_ARC4 not implemented");
+                // ARC4 (RC4) decryption
+                if (key != null)
+                {
+                    var decryptedBytes = RC4Decrypt(key, data);
+                    return new MemoryStream(decryptedBytes);
+                }
+                else
+                {
+                    return null;
+                }
             }
         }
     }
@@ -311,6 +341,71 @@ public class BLTEStream : Stream
     public override void Write(byte[] buffer, int offset, int count)
     {
         throw new InvalidOperationException();
+    }
+
+    private void HandleFrameBlock(Stream data)
+    {
+        // Frame blocks contain a sub-BLTE structure
+        // Read the inner content and recursively process it
+        using var ms = new MemoryStream();
+        data.CopyTo(ms);
+        ms.Position = 0;
+
+        using var br = new BinaryReader(ms);
+        int numSubBlocks = br.ReadInt32BE();
+
+        if (numSubBlocks <= 0)
+            return;
+
+        var subBlocks = new DataBlock[numSubBlocks];
+        for (int i = 0; i < numSubBlocks; i++)
+        {
+            subBlocks[i] = new DataBlock
+            {
+                CompSize = br.ReadInt32BE(),
+                DecompSize = br.ReadInt32BE(),
+                Hash = new Hash(br)
+            };
+        }
+
+        for (int i = 0; i < numSubBlocks; i++)
+        {
+            using var ns = new NestedStream(ms, subBlocks[i].CompSize, true);
+            HandleDataBlock(ns, i);
+        }
+    }
+
+    private static byte[] RC4Decrypt(byte[] key, Stream data)
+    {
+        // Read remaining data from stream
+        using var ms = new MemoryStream();
+        data.CopyTo(ms);
+        byte[] input = ms.ToArray();
+
+        // RC4 key schedule
+        byte[] s = new byte[256];
+        for (int i = 0; i < 256; i++)
+            s[i] = (byte)i;
+
+        int j = 0;
+        for (int i = 0; i < 256; i++)
+        {
+            j = (j + s[i] + key[i % key.Length]) & 0xFF;
+            (s[i], s[j]) = (s[j], s[i]);
+        }
+
+        // RC4 XOR stream
+        byte[] output = new byte[input.Length];
+        int x = 0, y = 0;
+        for (int i = 0; i < input.Length; i++)
+        {
+            x = (x + 1) & 0xFF;
+            y = (y + s[x]) & 0xFF;
+            (s[x], s[y]) = (s[y], s[x]);
+            output[i] = (byte)(input[i] ^ s[(s[x] + s[y]) & 0xFF]);
+        }
+
+        return output;
     }
 
     protected override void Dispose(bool disposing)

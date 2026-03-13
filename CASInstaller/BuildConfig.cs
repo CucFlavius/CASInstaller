@@ -34,6 +34,9 @@ public struct BuildConfig
     public string? BuildSignatureFile;
     public string[] PatchIndex;
     public string[] PatchIndexSize;
+    public Hash[] VfsRoot;
+    public string[] VfsRootSize;
+    public bool PlainMode;
 
     public BuildConfig(byte[] data)
     {
@@ -45,7 +48,7 @@ public struct BuildConfig
             return;
         }
 
-        var lines = content.Split(["\n"], StringSplitOptions.RemoveEmptyEntries);
+        var lines = content.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
 
         foreach (var t in lines)
         {
@@ -165,11 +168,24 @@ public struct BuildConfig
                 case "patch-index-size":
                     PatchIndexSize = cols[1].Split(' ');
                     break;
+                case "vfs-root":
+                    string?[] vfsRootEntries = cols[1].Split(' ');
+                    VfsRoot = new Hash[vfsRootEntries.Length];
+                    for (var i = 0; i < vfsRootEntries.Length; i++)
+                    {
+                        VfsRoot[i] = new Hash(vfsRootEntries[i]);
+                    }
+                    break;
+                case "vfs-root-size":
+                    VfsRootSize = cols[1].Split(' ');
+                    break;
                 default:
                     //Console.WriteLine("Unknown build config key: " + cols[0]);
                     break;
             }
         }
+
+        PlainMode = Encoding == null || Encoding.Length < 2;
     }
 
     public static async Task<BuildConfig> GetBuildConfig(CDN? cdn, Hash key, string? data_dir)
@@ -240,6 +256,11 @@ public struct BuildConfig
             sb.AppendLine($"[yellow]PatchIndex:[/] {string.Join(" ", PatchIndex)}");
         if (PatchIndexSize != null)
             sb.AppendLine($"[yellow]PatchIndexSize:[/] {string.Join(" ", PatchIndexSize)}");
+        if (VfsRoot != null)
+            sb.AppendLine($"[yellow]VfsRoot:[/] {string.Join(" ", VfsRoot)}");
+        if (VfsRootSize != null)
+            sb.AppendLine($"[yellow]VfsRootSize:[/] {string.Join(" ", VfsRootSize)}");
+        sb.AppendLine($"[yellow]PlainMode:[/] {PlainMode}");
         return sb.ToString();
     }
 

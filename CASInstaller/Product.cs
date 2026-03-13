@@ -76,6 +76,17 @@ public partial class Product
                     _version.BuildConfigHash = new Hash(_installSettings.OverrideBuildConfig);
             //_version?.LogInfo();
 
+            // Fetch and load keyring if available
+            if (_version.KeyRing.Key != null && _version.KeyRing.Key.Length == 16 && !_version.KeyRing.IsEmpty())
+            {
+                var keyringData = await _cdn.GetConfig(_version.KeyRing);
+                if (keyringData != null)
+                {
+                    var keyringText = System.Text.Encoding.UTF8.GetString(keyringData);
+                    KeyService.LoadKeyring(keyringText);
+                }
+            }
+
             _productConfig = await ProductConfig.GetProductConfig(_cdn, _version.ProductConfigHash);
             _productConfig?.Dump("productConfig.json");
             ProcessProductConfig(_productConfig, _installPath);
@@ -83,10 +94,16 @@ public partial class Product
             if (!string.IsNullOrEmpty(_productConfig?.all.config.decryption_key_name))
                 ArmadilloCrypt.Init(_productConfig.all.config.decryption_key_name);
 
-            _buildConfig = await BuildConfig.GetBuildConfig(_cdn, _version.BuildConfigHash, _data_dir);
+            if (_installSettings.OverrideBuildConfigFile != null)
+                _buildConfig = new BuildConfig(await File.ReadAllBytesAsync(_installSettings.OverrideBuildConfigFile));
+            else
+                _buildConfig = await BuildConfig.GetBuildConfig(_cdn, _version.BuildConfigHash, _data_dir);
             //_buildConfig?.LogInfo();
 
-            _cdnConfig = await CDNConfig.GetConfig(_cdn, _version.CdnConfigHash, _data_dir);
+            if (_installSettings.OverrideCDNConfigFile != null)
+                _cdnConfig = new CDNConfig(System.Text.Encoding.UTF8.GetString(await File.ReadAllBytesAsync(_installSettings.OverrideCDNConfigFile)));
+            else
+                _cdnConfig = await CDNConfig.GetConfig(_cdn, _version.CdnConfigHash, _data_dir);
             //_cdnConfig?.LogInfo();
 
             if (_cdnConfig != null)
@@ -168,7 +185,10 @@ public partial class Product
             _installTags.AddRange(tags_64bit);
 
         if (productConfig.all?.config?.form?.game_dir?.dirname != null)
+        {
             _game_dir = Path.Combine(installPath, productConfig.all.config.form.game_dir.dirname);
+            _baseDir = productConfig.all.config.form.game_dir.dirname;
+        }
         if (!Directory.Exists(_game_dir))
             Directory.CreateDirectory(_game_dir!);
         if (productConfig.all?.config?.shared_container_default_subfolder != null)
@@ -424,6 +444,8 @@ public partial class Product
         }
     }
 
+    string _baseDir = "World of Warcraft";
+
     async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size)
     {
         var writeSize = size + 30;
@@ -437,25 +459,27 @@ public partial class Product
 
         if (Working_Data == null)
         {
-            Working_Data = new Data(0, out var segmentHeaderKeys);
+            Working_Data = new Data(0, out var segmentHeaderKeys, _baseDir);
             segmentHeaderKeyList = [ segmentHeaderKeys ];
         }
 
         if (idxMap.TryGetValue(bucket, out var idx))
         {
-            if (Working_Data.CanWrite((int)writeSize))
-            {
-                var idxEntry = idx.Add(eKey, Working_Data.ID, (int)Working_Data.Offset, writeSize);
-                await Working_Data.WriteDataEntry(idxEntry, cdn, cdnConfig, archiveGroup);
-            }
-            else
+            if (!Working_Data.CanWrite((int)writeSize))
             {
                 Working_Data.Finalize(_gameDataDir);
                 var currentID = Working_Data.ID;
-                Working_Data = new Data(currentID + 1, out var segmentHeaderKeys);
+                Working_Data = new Data(currentID + 1, out var segmentHeaderKeys, _baseDir);
                 segmentHeaderKeyList.Add(segmentHeaderKeys);
                 GC.Collect();
             }
+
+            var idxEntry = idx.Add(eKey, Working_Data.ID, (int)Working_Data.Offset, writeSize);
+            var actualSize = await Working_Data.WriteDataEntry(idxEntry, cdn, cdnConfig, archiveGroup);
+
+            // Update IDX entry with actual size if it differs from expected
+            if (actualSize > 0 && actualSize != writeSize)
+                idxEntry.Size = actualSize;
         }
     }
 
@@ -602,8 +626,8 @@ public partial class Product
             CDNPath = _cdn?.Path,
             CDNHosts = _cdn?.Hosts,
             CDNServers = _cdn?.Servers,
-            Tags = ["Windows", "x86_64", "EU?", "acct-ROU?", "geoip-RO?", "enUS", "speech?:Windows", "x86_64", "EU?", "acct-ROU?", "geoip-RO?", "enUS", "text?" ],
-            Armadillo = "",
+            Tags = BuildDynamicTags(),
+            Armadillo = _productConfig?.all?.config?.decryption_key_name ?? "",
             LastActivated = "",
             Version = _version?.VersionsName,
             KeyRing = _version?.KeyRing ?? new Hash(),
@@ -612,6 +636,27 @@ public partial class Product
 
         _buildInfo.AddBuild(build);
         _buildInfo.Write(path);
+    }
+
+    private string[] BuildDynamicTags()
+    {
+        // Build base tags from install tags + locale
+        var baseTags = new List<string>();
+
+        if (_installTags != null)
+        {
+            foreach (var tag in _installTags)
+                baseTags.Add(tag);
+        }
+
+        baseTags.Add("enUS");
+
+        // Format: "<baseTags> speech:<baseTags> text"
+        // This is stored as a string[] that gets joined with spaces in BuildInfo.Write
+        var result = new List<string>(baseTags);
+        result.Add($"speech:{string.Join(" ", baseTags)}");
+        result.Add("text");
+        return result.ToArray();
     }
 
     private void WriteFlavorInfo(string? shared_game_dir, Version? version)

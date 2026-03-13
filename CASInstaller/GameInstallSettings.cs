@@ -10,7 +10,9 @@ public partial class Product
         public bool CreateLauncherDB { get; set; } = true;
         public bool CreateFlavorInfo { get; set; } = true;
         public string? OverrideCDNConfig { get; set; } = null;
+        public string? OverrideCDNConfigFile { get; set; } = null;
         public string? OverrideBuildConfig { get; set; } = null;
+        public string? OverrideBuildConfigFile { get; set; } = null;
         public string? OverrideHosts { get; set; } = null;
         public string? LocalCDNPath { get; set; } = null;
     }

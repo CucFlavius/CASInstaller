@@ -35,34 +35,28 @@ public class ArmadilloCrypt
         if (!fi.Exists)
             return false;
 
-        if (fi.Length != 20)
+        var fileData = File.ReadAllBytes(fi.FullName);
+
+        if (fileData.Length < 4)
             return false;
 
-        using (var file = fi.OpenRead())
+        // First 4 bytes are header, remaining bytes are the key
+        var keyLength = fileData.Length - 4;
+
+        switch (keyLength)
         {
-            var keyBytes = new byte[16];
-
-            if (file.Read(keyBytes, 0, keyBytes.Length) != 16)
+            case 0:
+                // Null key (no encryption)
+                key = null;
+                return true;
+            case 16:
+            case 32:
+                key = new byte[keyLength];
+                Array.Copy(fileData, 4, key, 0, keyLength);
+                return true;
+            default:
                 return false;
-
-            var checkSum = new byte[4];
-
-            if (file.Read(checkSum, 0, checkSum.Length) != 4)
-                return false;
-
-            var keyMD5 = MD5.HashData(keyBytes);
-
-            // check first 4 bytes
-            for (var i = 0; i < checkSum.Length; i++)
-            {
-                if (checkSum[i] != keyMD5[i])
-                    return false;
-            }
-
-            key = keyBytes;
         }
-
-        return true;
     }
 
     public byte[] DecryptFile(string name)

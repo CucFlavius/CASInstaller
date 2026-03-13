@@ -8,10 +8,12 @@ public struct CDNConfig
     public readonly Hash[]? Archives;
     public readonly int[]? ArchivesIndexSize;
     public Hash ArchiveGroup;
+    public int ArchiveGroupIndexSize;
 
     public readonly Hash[]? PatchArchives;
     public readonly int[]? PatchArchivesIndexSize;
     public Hash PatchArchiveGroup;
+    public int PatchArchiveGroupIndexSize;
 
     public Hash FileIndex;
     public int FileIndexSize;
@@ -24,7 +26,7 @@ public struct CDNConfig
         if (string.IsNullOrEmpty(data))
             return;
 
-        var lines = data.Split('\n');
+        var lines = data.Split(["\r\n", "\n"], StringSplitOptions.None);
 
         foreach (var line in lines)
         {
@@ -59,6 +61,9 @@ public struct CDNConfig
                 case "archive-group":
                     ArchiveGroup = new Hash(value);
                     break;
+                case "archive-group-index-size":
+                    ArchiveGroupIndexSize = int.Parse(value);
+                    break;
                 case "patch-archives":
                     string?[] patchArchiveParts = value.Split(" ");
                     PatchArchives = new Hash[patchArchiveParts.Length];
@@ -77,6 +82,9 @@ public struct CDNConfig
                     break;
                 case "patch-archive-group":
                     PatchArchiveGroup = new Hash(value);
+                    break;
+                case "patch-archive-group-index-size":
+                    PatchArchiveGroupIndexSize = int.Parse(value);
                     break;
                 case "file-index":
                     FileIndex = new Hash(value);
@@ -129,9 +137,11 @@ public struct CDNConfig
         sb.AppendLine($"[yellow]Archives:[/] {Archives?.Length}");
         sb.AppendLine($"[yellow]ArchivesIndexSize:[/] {ArchivesIndexSize?.Length}");
         sb.AppendLine($"[yellow]ArchiveGroup:[/] {ArchiveGroup}");
+        sb.AppendLine($"[yellow]ArchiveGroupIndexSize:[/] {ArchiveGroupIndexSize}");
         sb.AppendLine($"[yellow]PatchArchives:[/] {PatchArchives?.Length}");
         sb.AppendLine($"[yellow]PatchArchivesIndexSize:[/] {PatchArchivesIndexSize?.Length}");
         sb.AppendLine($"[yellow]PatchArchiveGroup:[/] {PatchArchiveGroup}");
+        sb.AppendLine($"[yellow]PatchArchiveGroupIndexSize:[/] {PatchArchiveGroupIndexSize}");
         sb.AppendLine($"[yellow]FileIndex:[/] {FileIndex}");
         sb.AppendLine($"[yellow]FileIndexSize:[/] {FileIndexSize}");
         sb.AppendLine($"[yellow]PatchFileIndex:[/] {PatchFileIndex}");

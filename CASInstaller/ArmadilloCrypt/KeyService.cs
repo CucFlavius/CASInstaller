@@ -54,4 +54,46 @@ public class KeyService
             }
         }
     }
+
+    public static void LoadKeyring(string keyringData)
+    {
+        var lines = keyringData.Split(["\r\n", "\n"], StringSplitOptions.None);
+        var loadedCount = 0;
+
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#'))
+                continue;
+
+            var parts = line.Split(" = ", 2, StringSplitOptions.TrimEntries);
+            if (parts.Length != 2)
+                continue;
+
+            var keyNameStr = parts[0].Trim();
+            var keyValueStr = parts[1].Trim();
+
+            if (!ulong.TryParse(keyNameStr, NumberStyles.HexNumber, null, out var keyName))
+            {
+                AnsiConsole.MarkupLine($"[yellow]Keyring: invalid key name '{keyNameStr}'[/]");
+                continue;
+            }
+
+            if (keyValueStr.Length != 32)
+            {
+                AnsiConsole.MarkupLine($"[yellow]Keyring: key {keyNameStr} is not 16 bytes (got {keyValueStr.Length / 2})[/]");
+                continue;
+            }
+
+            if (HasKey(keyName))
+            {
+                AnsiConsole.MarkupLine($"[yellow]Keyring: duplicate key {keyName:X16}, ignoring[/]");
+                continue;
+            }
+
+            SetKey(keyName, keyValueStr.FromHexString());
+            loadedCount++;
+        }
+
+        AnsiConsole.MarkupLine($"[green]Keyring: loaded {loadedCount} keys[/]");
+    }
 }

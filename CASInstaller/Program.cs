@@ -8,7 +8,9 @@ internal abstract class Program
         string? _branch = null;
         string? _installPath = null;
         string? _overrideCdnConfig = null;
+        string? _overrideCdnConfigFile = null;
         string? _overrideBuildConfig = null;
+        string? _overrideBuildConfigFile = null;
         string? _overrideHosts = null;
         string? _localCdnPath = null;
 
@@ -18,8 +20,8 @@ internal abstract class Program
                               " -p|--product <product:string>" +
                               " [-b|--branch <branch:string>]" +
                               " [-i|--install-path <install-path:string>]" +
-                              " [--override-cdn-config <cdn-config:16byteHexString>]" +
-                              " [--override-build-config <build-config:16byteHexString>]" +
+                              " [--override-cdn-config <cdn-config:16byteHexString|filePath>]" +
+                              " [--override-build-config <build-config:16byteHexString|filePath>]" +
                               " [--override-hosts <hosts:stringSpaceSeparated>]");
             return;
         }
@@ -42,10 +44,18 @@ internal abstract class Program
                     _installPath = args[++i];
                     break;
                 case "--override-cdn-config":
-                    _overrideCdnConfig = args[++i];
+                    var cdnConfigValue = args[++i];
+                    if (File.Exists(cdnConfigValue))
+                        _overrideCdnConfigFile = cdnConfigValue;
+                    else
+                        _overrideCdnConfig = cdnConfigValue;
                     break;
                 case "--override-build-config":
-                    _overrideBuildConfig = args[++i];
+                    var buildConfigValue = args[++i];
+                    if (File.Exists(buildConfigValue))
+                        _overrideBuildConfigFile = buildConfigValue;
+                    else
+                        _overrideBuildConfig = buildConfigValue;
                     break;
                 case "--override-hosts":
                     _overrideHosts = args[++i];
@@ -74,7 +84,9 @@ internal abstract class Program
             CreateLauncherDB = true,
             CreateFlavorInfo = true,
             OverrideCDNConfig = _overrideCdnConfig,
+            OverrideCDNConfigFile = _overrideCdnConfigFile,
             OverrideBuildConfig = _overrideBuildConfig,
+            OverrideBuildConfigFile = _overrideBuildConfigFile,
             OverrideHosts = _overrideHosts,
             LocalCDNPath = _localCdnPath,
         };

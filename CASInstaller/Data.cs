@@ -11,7 +11,7 @@ public class Data
     readonly MemoryStream stream;
     readonly BinaryWriter writer;
 
-    public Data(int ID, out byte[][] segmentHeaderKeys)
+    public Data(int ID, out byte[][] segmentHeaderKeys, string baseDir = "World of Warcraft")
     {
         this.ID = ID;
 
@@ -20,7 +20,7 @@ public class Data
 
         writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
 
-        segmentHeaderKeys = casReconstructionHeaderSerialize(ID);  // Write the initial header
+        segmentHeaderKeys = casReconstructionHeaderSerialize(ID, baseDir);  // Write the initial header
     }
 
     public long Offset => stream.Length;
@@ -30,35 +30,35 @@ public class Data
         return Offset + writeSize <= DATA_TOTAL_SIZE_MAXIMUM;
     }
 
-    byte[][] casReconstructionHeaderSerialize(int dataNumber)
+    byte[][] casReconstructionHeaderSerialize(int dataNumber, string baseDir)
     {
         var container = new CasContainerIndex()
         {
-            BaseDir = "World of Warcraft",
+            BaseDir = baseDir,
             BindMode = true,
             MaxSize = 30
         };
 
         var (_, SegmentHeaderKeys, _) = container.GenerateSegmentHeaderKeys((uint)dataNumber);
 
+        // Binary shows segment headers are contiguous at 30 bytes each, no padding
         for (var i = 0; i < 16; i++)
         {
             var reversedSegmentHeaderKey = SegmentHeaderKeys[i].Reverse().ToArray();
 
-             var header = new CasReconstructionHeader()
-             {
-                 BLTEHash = reversedSegmentHeaderKey,
-                 size = 30,
-                 channel = casIndexChannel.Meta,
-             };
+            var header = new CasReconstructionHeader()
+            {
+                BLTEHash = reversedSegmentHeaderKey,
+                size = 30,
+                channel = casIndexChannel.Meta,
+            };
             header.Write(writer, (ushort)dataNumber, (uint)(i * 30));
-            writer.Write(new byte[30]);
         }
 
         return SegmentHeaderKeys;
     }
 
-    public async Task WriteDataEntry(IDX.Entry idxEntry, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup)
+    public async Task<uint> WriteDataEntry(IDX.Entry idxEntry, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup)
     {
         var offset = idxEntry.Offset;
         var key = idxEntry.Key;
@@ -83,20 +83,23 @@ public class Data
             data = await DownloadFileDirectly(key, cdn);
         }
 
-        if (data == null) return;
+        if (data == null) return 0;
 
-        // Ensure we're not overwriting stream position by reusing the BinaryWriter
-        //await using var bws = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+        // Use actual data length for the reconstruction header size
+        var actualSize = (uint)(data.Length + 30);
+
         var header = new CasReconstructionHeader()
         {
             BLTEHash = key.Key.Reverse().ToArray(),
-            size = idxEntry.Size,
+            size = actualSize,
             channel = casIndexChannel.Data,
         };
 
         writer.Seek(offset, SeekOrigin.Begin);
         header.Write(writer, (ushort)archiveID, (uint)offset);
         writer.Write(data);
+
+        return actualSize;
     }
 
     public static async Task<byte[]?> DownloadFileFromIndex(ArchiveIndex.IndexEntry indexEntry, CDN? cdn, CDNConfig? cdnConfig)

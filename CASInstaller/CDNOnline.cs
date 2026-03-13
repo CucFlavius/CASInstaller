@@ -28,7 +28,7 @@ public class CDNOnline : CDN
         ConfigPath = parts[4] ?? "";
 
         _client = new HttpClient();
-        _client.Timeout = new TimeSpan(0, 1, 0);
+        _client.Timeout = new TimeSpan(0, 10, 0);
     }
 
     static async Task<List<CDN>> GetAllCDN(string? product)
@@ -149,6 +149,7 @@ public class CDNOnline : CDN
             try
             {
                 var encryptedData = await GetDataFromURL($"http://{host}/{Path}/data/{key.UrlString}");
+                if (encryptedData == null) continue;
                 data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
             }
             catch (Exception e)
@@ -171,6 +172,53 @@ public class CDNOnline : CDN
             try
             {
                 var encryptedData = await GetDataFromURL($"http://{host}/{Path}/patch/{key.UrlString}");
+                if (encryptedData == null) continue;
+                data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+            }
+            catch (Exception e)
+            {
+                AnsiConsole.WriteException(e);
+            }
+        }
+
+        return data;
+    }
+
+    public override async Task<byte[]?> GetDataIndex(Hash key)
+    {
+        if (key.IsEmpty())
+            throw new Exception("CDN.GetDataIndex Key is empty");
+
+        byte[]? data = null;
+        foreach (var host in Hosts)
+        {
+            try
+            {
+                var encryptedData = await GetDataFromURL($"http://{host}/{Path}/data/{key.UrlString}.index");
+                if (encryptedData == null) continue;
+                data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+            }
+            catch (Exception e)
+            {
+                AnsiConsole.WriteException(e);
+            }
+        }
+
+        return data;
+    }
+
+    public override async Task<byte[]?> GetPatchIndex(Hash key)
+    {
+        if (key.IsEmpty())
+            throw new Exception("CDN.GetPatchIndex Key is empty");
+
+        byte[]? data = null;
+        foreach (var host in Hosts)
+        {
+            try
+            {
+                var encryptedData = await GetDataFromURL($"http://{host}/{Path}/patch/{key.UrlString}.index");
+                if (encryptedData == null) continue;
                 data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
             }
             catch (Exception e)
@@ -193,6 +241,7 @@ public class CDNOnline : CDN
             try
             {
                 var encryptedData = await GetDataFromURL($"http://{host}/{Path}/{key.UrlString}", start, size);
+                if (encryptedData == null) continue;
                 data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
             }
             catch (Exception e)
@@ -215,6 +264,7 @@ public class CDNOnline : CDN
             try
             {
                 var encryptedData = await GetDataFromURL($"http://{host}/{Path}/config/{key.UrlString}");
+                if (encryptedData == null) continue;
                 data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
             }
             catch (Exception e)
@@ -237,6 +287,7 @@ public class CDNOnline : CDN
             try
             {
                 var encryptedData = await GetDataFromURL($"http://{host}/{ConfigPath}/{key.UrlString}");
+                if (encryptedData == null) continue;
                 data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
             }
             catch (Exception e)

@@ -131,4 +131,34 @@ public class CDNLocal : CDN
             return Task.FromResult<byte[]>(null);
         }
     }
+
+    public override Task<byte[]?> GetDataIndex(Hash key)
+    {
+        try
+        {
+            var encryptedData = GetDataFromPath($"{Path}/data/{key.UrlString}.index");
+            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+            return Task.FromResult(data);
+        }
+        catch (Exception e)
+        {
+            AnsiConsole.WriteException(e);
+            return Task.FromResult<byte[]?>(null);
+        }
+    }
+
+    public override Task<byte[]?> GetPatchIndex(Hash key)
+    {
+        try
+        {
+            var encryptedData = GetDataFromPath($"{Path}/patch/{key.UrlString}.index");
+            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+            return Task.FromResult(data);
+        }
+        catch (Exception e)
+        {
+            AnsiConsole.WriteException(e);
+            return Task.FromResult<byte[]?>(null);
+        }
+    }
 }

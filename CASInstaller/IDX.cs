@@ -61,6 +61,9 @@ public class IDX
         bw.Write(headerBytes);
         bw.BaseStream.Position += 8;    // Padding
         
+        // Sort entries by key before writing
+        m_sortedRecords.Sort((a, b) => a.Key.CompareTo(b.Key));
+
         // Build entries
         EntriesSize = m_sortedRecords.Count * (Spec.Size + Spec.Offset + Spec.Key);
         byte[]? entryBytes = null;
@@ -70,26 +73,19 @@ public class IDX
         }
         else
         {
-            uint epc = 0;
-            uint epb = 0;
             using var entriesMs = new MemoryStream();
             using var entriesBw = new BinaryWriter(entriesMs);
             foreach (var entry in m_sortedRecords)
             {
-                using var entryMS = new MemoryStream();
-                using var entryBW = new BinaryWriter(entryMS);
-                entry.Write(entryBW);
-                entryBW.Flush(); // Ensure all data is written to the MemoryStream
-                entryMS.Position = 0; // Reset the stream position for hashing
-                entryBytes = entryMS.ToArray();
-
-                entriesBw.Write(entryBytes);
-                
-                HashAlgo.HashLittle2(entryBytes, entryBytes.Length, ref epc, ref epb);
+                entry.Write(entriesBw);
             }
-            entriesBw.Flush(); // Ensure all data is written to the MemoryStream
-            entriesMs.Position = 0; // Reset the stream position for hashing
+            entriesBw.Flush();
             entryBytes = entriesMs.ToArray();
+
+            // Hash the full concatenated entries buffer
+            uint epc = 0;
+            uint epb = 0;
+            HashAlgo.HashLittle2(entryBytes, entryBytes.Length, ref epc, ref epb);
             EntriesHash = epc;
         }
 
@@ -185,7 +181,7 @@ public class IDX
         public readonly Hash Key;
         public readonly int ArchiveID;
         public readonly int Offset;
-        public readonly uint Size;
+        public uint Size;
 
         public Entry(Hash key, int archiveId, int offset, uint size)
         {
