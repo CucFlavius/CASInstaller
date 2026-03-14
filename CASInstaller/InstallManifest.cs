@@ -83,6 +83,7 @@ public class InstallManifest
     public static async Task<InstallManifest?> GetInstall(CDN cdn, Hash key)
     {
         var data = await cdn.GetData(key);
+        if (data == null) return null;
 
         using var ms = new MemoryStream(data);
         await using var blte = new BLTE.BLTEStream(ms, default);

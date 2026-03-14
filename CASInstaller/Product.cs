@@ -136,15 +136,15 @@ public partial class Product
 
             if (_buildConfig != null)
             {
-                _encoding = await Encoding.GetEncoding(_cdn, _buildConfig.Value.Encoding[1], 0, true);
+                _encoding = await Encoding.GetEncoding(_cdn, _buildConfig.Value.Encoding[^1], 0, true);
                 //_encoding?.LogInfo();
                 //_encoding?.Dump("encoding.txt");
 
-                _download = await DownloadManifest.GetDownload(_cdn, _buildConfig.Value.Download[1]);
+                _download = await DownloadManifest.GetDownload(_cdn, _buildConfig.Value.Download[^1]);
                 _download?.Dump($"download_manifest_analysis_{_product}.txt");
                 //_download?.LogInfo();
 
-                _install = await InstallManifest.GetInstall(_cdn, _buildConfig.Value.Install[1]);
+                _install = await InstallManifest.GetInstall(_cdn, _buildConfig.Value.Install[^1]);
                 _install?.Dump("install.txt");
                 //_install?.LogInfo();
             }
@@ -165,12 +165,16 @@ public partial class Product
             (Hash eKey, ulong size, bool truncateKey)? patchIndexEntry = null;
 
             // Add encoding, download, install (sorted among VFS entries)
-            specialEntries.Add(((Hash)_buildConfig?.Download[1]!, (ulong)int.Parse(_buildConfig?.DownloadSize[1]!), false));
-            specialEntries.Add(((Hash)_buildConfig?.Install[1]!, (ulong)int.Parse(_buildConfig?.InstallSize[1]!), false));
-            specialEntries.Add(((Hash)_buildConfig?.Encoding[1]!, (ulong)int.Parse(_buildConfig?.EncodingSize[1]!), false));
-            specialKeysSeen.Add((Hash)_buildConfig?.Download[1]!);
-            specialKeysSeen.Add((Hash)_buildConfig?.Install[1]!);
-            specialKeysSeen.Add((Hash)_buildConfig?.Encoding[1]!);
+            void AddSpecialEntry(Hash[]? keys, string[]? sizes)
+            {
+                if (keys == null || keys.Length == 0 || sizes == null || sizes.Length == 0) return;
+                var eKey = keys[^1];
+                if (specialKeysSeen.Add(eKey))
+                    specialEntries.Add((eKey, (ulong)int.Parse(sizes[^1]), false));
+            }
+            AddSpecialEntry(_buildConfig?.Download, _buildConfig?.DownloadSize);
+            AddSpecialEntry(_buildConfig?.Install, _buildConfig?.InstallSize);
+            AddSpecialEntry(_buildConfig?.Encoding, _buildConfig?.EncodingSize);
 
             // Patch-index is written LAST in the sorted section (not at its key-sorted position)
             if (_buildConfig?.PatchIndex != null && _buildConfig?.PatchIndexSize != null

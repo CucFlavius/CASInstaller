@@ -26,146 +26,108 @@ public class CDNLocal : CDN
         OriginalServers = realCdn.Servers;
     }
 
-    byte[] GetDataFromPath(string url, int start, int size)
+    byte[]? GetDataFromPath(string url, int start, int size)
     {
-        if (url == null)
-            throw new Exception("CDN.GetDataFromURL URL is null");
+        var path = System.IO.Path.Combine(Hosts[0], url);
+        if (!File.Exists(path))
+        {
+            AnsiConsole.MarkupLine($"[yellow]Missing local CDN file:[/] {path}");
+            return null;
+        }
 
-        try
-        {
-            var path = System.IO.Path.Combine(Hosts[0], url);
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
-            fs.Seek(start, SeekOrigin.Begin);
-            using var br = new BinaryReader(fs);
-            var data = br.ReadBytes(size);
-            return data;
-        }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            throw;
-        }
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
+        fs.Seek(start, SeekOrigin.Begin);
+        using var br = new BinaryReader(fs);
+        return br.ReadBytes(size);
     }
 
-    byte[] GetDataFromPath(string url)
+    byte[]? GetDataFromPath(string url)
     {
-        if (url == null)
-            throw new Exception("CDN.GetDataFromURL URL is null");
+        var path = System.IO.Path.Combine(Hosts[0], url);
+        if (!File.Exists(path))
+        {
+            AnsiConsole.MarkupLine($"[yellow]Missing local CDN file:[/] {path}");
+            return null;
+        }
 
-        try
-        {
-            var path = System.IO.Path.Combine(Hosts[0], url);
-            return File.ReadAllBytes(path);
-        }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            throw;
-        }
+        return File.ReadAllBytes(path);
     }
 
     public override Task<byte[]?> GetCDNConfig(Hash key)
     {
-        try
+        // Try ConfigPath first, then fall back to Path/config (matching CDNOnline behavior)
+        var configPaths = new[] { ConfigPath, $"{Path}/config" };
+
+        foreach (var configPath in configPaths)
         {
-            var encryptedData = GetDataFromPath($"{ConfigPath}/{key.UrlString}");
+            var fullPath = System.IO.Path.Combine(Hosts[0], $"{configPath}/{key.UrlString}");
+            if (!File.Exists(fullPath)) continue;
+
+            var encryptedData = GetDataFromPath($"{configPath}/{key.UrlString}");
             var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
             return Task.FromResult(data);
         }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            return Task.FromResult<byte[]>(null);
-        }
+
+        AnsiConsole.MarkupLine($"[bold red]Failed to load config from local CDN:[/] {key}");
+        return Task.FromResult<byte[]?>(null);
     }
 
     public override Task<byte[]?> GetConfig(Hash key)
     {
-        try
+        // Try Path/config first, then fall back to ConfigPath (matching CDNOnline behavior)
+        var configPaths = new[] { $"{Path}/config", ConfigPath };
+
+        foreach (var configPath in configPaths)
         {
-            var encryptedData = GetDataFromPath($"{Path}/config/{key.UrlString}");
+            var fullPath = System.IO.Path.Combine(Hosts[0], $"{configPath}/{key.UrlString}");
+            if (!File.Exists(fullPath)) continue;
+
+            var encryptedData = GetDataFromPath($"{configPath}/{key.UrlString}");
             var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
             return Task.FromResult(data);
         }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            return Task.FromResult<byte[]>(null);
-        }
+
+        AnsiConsole.MarkupLine($"[bold red]Failed to load config from local CDN:[/] {key}");
+        return Task.FromResult<byte[]?>(null);
     }
 
     public override Task<byte[]?> GetData(Hash key)
     {
-        try
-        {
-            var encryptedData = GetDataFromPath($"{Path}/data/{key.UrlString}");
-            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-            return Task.FromResult(data);
-        }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            return Task.FromResult<byte[]>(null);
-        }
+        var encryptedData = GetDataFromPath($"{Path}/data/{key.UrlString}");
+        if (encryptedData == null) return Task.FromResult<byte[]?>(null);
+        var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+        return Task.FromResult(data);
     }
 
     public override Task<byte[]?> GetData(Hash key, int start, int size)
     {
-        try
-        {
-            var encryptedData = GetDataFromPath($"{Path}/data/{key.UrlString}", start, size);
-            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-            return Task.FromResult(data);
-        }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            return Task.FromResult<byte[]>(null);
-        }
+        var encryptedData = GetDataFromPath($"{Path}/data/{key.UrlString}", start, size);
+        if (encryptedData == null) return Task.FromResult<byte[]?>(null);
+        var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+        return Task.FromResult(data);
     }
 
     public override Task<byte[]> GetPatch(Hash key)
     {
-        try
-        {
-            var encryptedData = GetDataFromPath($"{Path}/patch/{key.UrlString}");
-            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-            return Task.FromResult(data);
-        }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            return Task.FromResult<byte[]>(null);
-        }
+        var encryptedData = GetDataFromPath($"{Path}/patch/{key.UrlString}");
+        if (encryptedData == null) return Task.FromResult<byte[]>(null);
+        var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+        return Task.FromResult(data);
     }
 
     public override Task<byte[]?> GetDataIndex(Hash key)
     {
-        try
-        {
-            var encryptedData = GetDataFromPath($"{Path}/data/{key.UrlString}.index");
-            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-            return Task.FromResult(data);
-        }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            return Task.FromResult<byte[]?>(null);
-        }
+        var encryptedData = GetDataFromPath($"{Path}/data/{key.UrlString}.index");
+        if (encryptedData == null) return Task.FromResult<byte[]?>(null);
+        var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+        return Task.FromResult(data);
     }
 
     public override Task<byte[]?> GetPatchIndex(Hash key)
     {
-        try
-        {
-            var encryptedData = GetDataFromPath($"{Path}/patch/{key.UrlString}.index");
-            var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-            return Task.FromResult(data);
-        }
-        catch (Exception e)
-        {
-            AnsiConsole.WriteException(e);
-            return Task.FromResult<byte[]?>(null);
-        }
+        var encryptedData = GetDataFromPath($"{Path}/patch/{key.UrlString}.index");
+        if (encryptedData == null) return Task.FromResult<byte[]?>(null);
+        var data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+        return Task.FromResult(data);
     }
 }

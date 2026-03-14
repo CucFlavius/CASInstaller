@@ -147,6 +147,7 @@ public class Data
             else
             {
                 var decryptedData = await cdn.GetData(archive.Value, (int)indexEntry.offset, (int)indexEntry.size);
+                if (decryptedData == null) return null;
 
                 // Cache
                 await File.WriteAllBytesAsync(dataFilePath, decryptedData);
@@ -174,6 +175,7 @@ public class Data
             else
             {
                 var decryptedData = await cdn.GetData(key);
+                if (decryptedData == null) return null;
 
                 // Cache
                 await File.WriteAllBytesAsync(dataFilePath, decryptedData);

@@ -191,6 +191,7 @@ public class Encoding
         if (encoded)
         {
             var data = await cdn.GetData(key);
+            if (data == null) throw new Exception($"Failed to download encoding file: {key}");
             using var ms = new MemoryStream(data);
             await using var blte = new BLTE.BLTEStream(ms, default);
             using var fso = new MemoryStream();
