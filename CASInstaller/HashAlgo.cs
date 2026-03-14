@@ -97,13 +97,13 @@ public class HashAlgo
     //   length: The length of the input key.
     //   pc: Initial value for primary hash, updated to final primary hash.
     //   pb: Initial value for secondary hash, updated to final secondary hash.
-    public static void HashLittle2(byte[] key, int length, ref uint pc, ref uint pb)
+    public static void HashLittle2(byte[] key, int length, ref uint pc, ref uint pb, int offset = 0)
     {
         uint a, b, c;
         a = b = c = 0xdeadbeef + (uint)length + pc;
         c += pb;
 
-        int i = 0;
+        int i = offset;
         while (length > 12)
         {
             a += BitConverter.ToUInt32(key, i);

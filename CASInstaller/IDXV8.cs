@@ -59,10 +59,20 @@ public class IDXV8
             bw.Write(new byte[padTo32]);
 
         // Sorted section (empty)
-        bw.Write(0);    // sorted_size = 0
-        bw.Write(0u);   // sorted_hash = 0
+        bw.Write(0);            // sorted_size = 0
+        bw.Write(0xdeadbeefu);  // sorted_hash = HashLittle2(empty) = 0xdeadbeef
 
-        // Pad to total file size (update section is all zeros)
+        // Pad to 4096-byte boundary for update section
+        var sortedEnd = (int)fs.Position;
+        var updateOffset = (sortedEnd + 4095) & ~4095;
+        if (updateOffset > sortedEnd)
+            bw.Write(new byte[updateOffset - sortedEnd]);
+
+        // Write empty update section header
+        bw.Write(0);    // update_size
+        bw.Write(0u);   // update_hash
+
+        // Pad to total file size
         var remaining = TOTAL_FILE_SIZE - (int)fs.Position;
         if (remaining > 0)
             bw.Write(new byte[remaining]);

@@ -373,6 +373,8 @@ public partial class Product
         WriteShmemFiles();
         WriteEcacheDirectories();
         WriteExtractDirectory();
+        WriteResidencyFiles();
+        CleanupRepairMarker();
 
         if (_installSettings.CreateProductDB)
             WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
@@ -726,7 +728,9 @@ public partial class Product
             for (var i = 0; i < 16; i++)
             {
                 var key = segmentHeaderKeyList[d][i];
-                var bucket = Data.cascGetBucketIndex(key);
+                // Segment header keys use bucket mode +1 for both generation and lookup,
+                // so use the generation bucket index directly (not cascGetBucketIndex which is mode 0)
+                var bucket = (byte)i;
                 if (idxMap.TryGetValue(bucket, out var sidx))
                 {
                     _ = sidx.Add(new Hash(key), d, i * 30, 30);
@@ -793,6 +797,32 @@ public partial class Product
             Directory.CreateDirectory(extractDir);
     }
 
+    void WriteResidencyFiles()
+    {
+        if (_data_dir == null) return;
+
+        // Product-specific .residency (Data/{product}/.residency)
+        var productDir = Path.Combine(_data_dir, _product);
+        if (Directory.Exists(productDir))
+            File.Create(Path.Combine(productDir, ".residency")).Dispose();
+
+        // BTS .residency (.battle.net/bts/.residency) - only for shared container installs
+        if (_game_dir != null)
+        {
+            var btsDir = Path.Combine(_game_dir, ".battle.net", "bts");
+            if (Directory.Exists(btsDir))
+                File.Create(Path.Combine(btsDir, ".residency")).Dispose();
+        }
+    }
+
+    void CleanupRepairMarker()
+    {
+        if (_gameDataDir == null) return;
+        var repairMarker = Path.Combine(_gameDataDir, "RepairMarker.psv");
+        if (File.Exists(repairMarker))
+            File.Delete(repairMarker);
+    }
+
     void WriteEmptyCascContainer(string dir, bool includeDataFile = false)
     {
         if (!Directory.Exists(dir))
@@ -803,11 +833,8 @@ public partial class Product
         {
             var bucket = (byte)i;
             var path = Path.Combine(dir, $"{bucket:x2}00000001.idx");
-            if (!File.Exists(path))
-            {
-                var idx = new IDX(path, bucket);
-                idx.Write();
-            }
+            var idx = new IDX(path, bucket);
+            idx.Write();
         }
 
         // Write shmem
@@ -914,6 +941,7 @@ public partial class Product
                 LanguageSettings = ProtoDatabase.LanguageSettingType.LangsettingAdvanced,
                 SelectedTextLanguage = "enUS",
                 SelectedSpeechLanguage = "enUS",
+                Languages = { new LanguageSetting { Language = "enUS", Option = ProtoDatabase.LanguageOption.LangoptionTextAndSpeech } },
                 AdditionalTags = "",
                 VersionBranch = "",
                 AccountCountry = "",    // TODO: Find US country code
@@ -932,6 +960,7 @@ public partial class Product
                     CurrentVersion = "",
                     CurrentVersionStr = version?.VersionsName ?? "",
                     DecryptionKey = "",     // TODO: Needs armadillo key name?
+                    CompletedBuildKeys = { version?.BuildConfigHash.KeyString?.ToLower() ?? "" },
                     ActiveBuildKey = version?.BuildConfigHash.KeyString?.ToLower() ?? "",
                     ActiveBgdlKey = "",
                     ActiveInstallKey = "",
@@ -980,7 +1009,7 @@ public partial class Product
             ProductOperations = null,
             ProductFamily = buildConfig?.BuildProduct.ToLower() ?? "wow",
             Hidden = false,
-            PersistentJsonStorage = @"{\u0022user_install_package_settings\u0022:[]}"
+            PersistentJsonStorage = "{\"user_install_package_settings\":[]}"
         };
 
         if (gameDir == null)

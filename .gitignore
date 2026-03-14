@@ -402,3 +402,4 @@ productConfig.json
 
 cache/*
 install.txt
+*.txt

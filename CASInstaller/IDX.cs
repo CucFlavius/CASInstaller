@@ -69,10 +69,11 @@ public class IDX
         byte[]? entryBytes = null;
         if (EntriesSize == 0)
         {
-            EntriesHash = 0;
+            EntriesHash = 0xdeadbeef; // HashLittle2(empty) = 0xdeadbeef
         }
         else
         {
+            var entrySize = Spec.Size + Spec.Offset + Spec.Key;
             using var entriesMs = new MemoryStream();
             using var entriesBw = new BinaryWriter(entriesMs);
             foreach (var entry in m_sortedRecords)
@@ -82,29 +83,40 @@ public class IDX
             entriesBw.Flush();
             entryBytes = entriesMs.ToArray();
 
-            // Hash the full concatenated entries buffer
+            // Hash entries per-entry with running state (matching CASC KMT validation)
             uint epc = 0;
             uint epb = 0;
-            HashAlgo.HashLittle2(entryBytes, entryBytes.Length, ref epc, ref epb);
+            for (var i = 0; i < m_sortedRecords.Count; i++)
+            {
+                HashAlgo.HashLittle2(entryBytes, entrySize, ref epc, ref epb, i * entrySize);
+            }
             EntriesHash = epc;
         }
 
-        // Write entries
+        // Write entries (sorted section)
         bw.Write(EntriesSize);
         bw.Write(EntriesHash);
         if (entryBytes != null)
             bw.Write(entryBytes);
-        
-        // Pad to next 64KB boundary (matching Agent behavior)
+
+        // Pad to 4096-byte boundary for update section
+        // Agent computes: update_offset = (sorted_end + 4095) & 0xFFFFF000
+        var sortedEnd = (int)fs.Position;
+        var updateOffset = (sortedEnd + 4095) & ~4095; // 4096-aligned
+        if (updateOffset > sortedEnd)
+            bw.Write(new byte[updateOffset - sortedEnd]);
+
+        // Update section: CASC requires at least 0x7800 (30720) bytes from
+        // updateOffset to EOF (60 pages of 512 bytes). Write zeros for empty section.
+        const int UPDATE_SECTION_MIN_SIZE = 0x7800;
+
+        // Pad to next 64KB boundary, ensuring update section has at least 0x7800 bytes
         const int BLOCK_SIZE = 65536;
-        var minSize = Math.Max(fs.Length, BLOCK_SIZE); // at least 64KB
+        var minSize = Math.Max(updateOffset + UPDATE_SECTION_MIN_SIZE, BLOCK_SIZE);
         var paddedSize = (minSize + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
         var paddingSize = paddedSize - fs.Length;
         if (paddingSize > 0)
-        {
-            var padding = new byte[paddingSize];
-            bw.Write(padding);
-        }
+            bw.Write(new byte[paddingSize]);
 
         bw.Flush();
     }
