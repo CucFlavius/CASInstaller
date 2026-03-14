@@ -37,7 +37,12 @@ public class ProductConfig
         };
 
         var reader = new Utf8JsonReader(data, options);
-        return JsonSerializer.Deserialize<ProductConfig>(ref reader);
+        var serializerOptions = new JsonSerializerOptions
+        {
+            NumberHandling = JsonNumberHandling.AllowReadingFromString | JsonNumberHandling.AllowNamedFloatingPointLiterals,
+            AllowTrailingCommas = true,
+        };
+        return JsonSerializer.Deserialize<ProductConfig>(ref reader, serializerOptions);
     }
 
     public void Dump(string productconfigJson)
@@ -423,15 +428,15 @@ public class ProductConfig
     public class Game_Dir1
     {
         public string _default { get; set; }
-        public long required_space { get; set; }
-        public int space_per_extra_language { get; set; }
+        public double required_space { get; set; }
+        public double space_per_extra_language { get; set; }
     }
 
     public class Min_Spec
     {
-        public int default_required_cpu_cores { get; set; }
-        public int default_required_cpu_speed { get; set; }
-        public int default_required_ram { get; set; }
+        public double default_required_cpu_cores { get; set; }
+        public double default_required_cpu_speed { get; set; }
+        public double default_required_ram { get; set; }
         public bool default_requires_64_bit { get; set; }
         public Required_Osspecs required_osspecs { get; set; }
     }
@@ -443,7 +448,7 @@ public class ProductConfig
 
     public class _1011
     {
-        public int required_subversion { get; set; }
+        public double required_subversion { get; set; }
     }
 
     public class Uninstall
@@ -505,15 +510,15 @@ public class ProductConfig
     public class Game_Dir2
     {
         public string _default { get; set; }
-        public long required_space { get; set; }
-        public int space_per_extra_language { get; set; }
+        public double required_space { get; set; }
+        public double space_per_extra_language { get; set; }
     }
 
     public class Min_Spec1
     {
-        public int default_required_cpu_cores { get; set; }
-        public int default_required_cpu_speed { get; set; }
-        public int default_required_ram { get; set; }
+        public double default_required_cpu_cores { get; set; }
+        public double default_required_cpu_speed { get; set; }
+        public double default_required_ram { get; set; }
         public bool default_requires_64_bit { get; set; }
         public Required_Osspecs1 required_osspecs { get; set; }
     }
@@ -525,7 +530,7 @@ public class ProductConfig
 
     public class _61
     {
-        public int required_subversion { get; set; }
+        public double required_subversion { get; set; }
     }
 
     public class Uninstall1
