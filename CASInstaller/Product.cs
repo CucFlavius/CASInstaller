@@ -1119,13 +1119,43 @@ public partial class Product
             Tags = BuildDynamicTags(),
             Armadillo = _productConfig?.all?.config?.decryption_key_name ?? "",
             LastActivated = "",
-            Version = _version?.VersionsName,
+            Version = GetBuildVersion() ?? _version?.VersionsName,
             KeyRing = _version?.KeyRing ?? new Hash(),
             Product = _version?.Product
         };
 
         _buildInfo.AddBuild(build);
         _buildInfo.Write(path);
+    }
+
+    /// <summary>
+    /// Extract the version string from the build config's build-name field.
+    /// e.g., "WOW-27101patch8.0.1_Retail" -> "8.0.1.27101"
+    /// Falls back to null if the build config doesn't have a parseable build-name.
+    /// </summary>
+    string? GetBuildVersion()
+    {
+        if (_buildConfig == null) return null;
+
+        var buildName = _buildConfig.Value.BuildName;
+        if (buildName != null)
+        {
+            var patchIdx = buildName.IndexOf("patch", StringComparison.OrdinalIgnoreCase);
+            if (patchIdx > 0)
+            {
+                var dashIdx = buildName.LastIndexOf('-', patchIdx);
+                if (dashIdx >= 0)
+                {
+                    var buildNum = buildName.Substring(dashIdx + 1, patchIdx - dashIdx - 1);
+                    var rest = buildName.Substring(patchIdx + 5);
+                    var underscoreIdx = rest.IndexOf('_');
+                    var branch = underscoreIdx >= 0 ? rest.Substring(0, underscoreIdx) : rest;
+                    return $"{branch}.{buildNum}";
+                }
+            }
+        }
+
+        return null;
     }
 
     private string[] BuildDynamicTags()
