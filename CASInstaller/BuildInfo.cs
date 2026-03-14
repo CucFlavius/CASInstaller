@@ -112,7 +112,7 @@ public class BuildInfo
     
     public void Write(string path)
     {
-        using var writer = new StreamWriter(path);
+        using var writer = new StreamWriter(path) { NewLine = "\n" };
         Build.WriteTableHeader(writer);
         foreach (var build in Builds)
         {

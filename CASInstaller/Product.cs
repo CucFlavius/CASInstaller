@@ -369,6 +369,10 @@ public partial class Product
         if (_gameDataDir != null) Working_Data?.Finalize(_gameDataDir);
 
         WriteIDXMap();
+        WriteProductIDX();
+        WriteShmemFiles();
+        WriteEcacheDirectories();
+        WriteExtractDirectory();
 
         if (_installSettings.CreateProductDB)
             WriteProductDB(_game_dir, _version, _productConfig, _buildConfig);
@@ -398,7 +402,6 @@ public partial class Product
         if (productConfig.all?.config?.form?.game_dir?.dirname != null)
         {
             _game_dir = Path.Combine(installPath, productConfig.all.config.form.game_dir.dirname);
-            _baseDir = productConfig.all.config.form.game_dir.dirname;
         }
         if (!Directory.Exists(_game_dir))
             Directory.CreateDirectory(_game_dir!);
@@ -413,6 +416,10 @@ public partial class Product
             _data_dir = Path.Combine(_game_dir!, productConfig.all.config.data_dir);
         if (!Directory.Exists(_data_dir))
             Directory.CreateDirectory(_data_dir!);
+
+        // Agent passes the full absolute normalized path to the CASC data directory
+        // e.g., "d:/Games/_classic_era_/Data/data" (forward slashes, lowercase drive letter)
+        _baseDir = NormalizePath(Path.Combine(_data_dir!, "data"));
     }
 
     private static async Task<ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>?> ProcessIndices(
@@ -461,6 +468,53 @@ public partial class Product
             if (data_dir != null)
                 ArchiveIndex.GenerateIndexGroupFile(indexGroup, groupPath, offsetBytes);
             ArchiveIndex.GenerateIndexGroupFile(indexGroup, cacheGroupPath, offsetBytes);
+        }
+
+        // Ensure all individual archive index files are saved to the install directory
+        if (indices != null && data_dir != null)
+        {
+            if (!Directory.Exists(saveDir))
+                Directory.CreateDirectory(saveDir);
+
+            var cacheDir = Path.Combine("cache", "indices");
+            var missingCount = 0;
+            foreach (var indexKey in indices)
+            {
+                var savePath = Path.Combine(saveDir, indexKey + ".index");
+                if (File.Exists(savePath)) continue;
+
+                // Try copying from persistent cache
+                var cachePath = Path.Combine(cacheDir, indexKey + ".index");
+                if (File.Exists(cachePath))
+                {
+                    File.Copy(cachePath, savePath);
+                    continue;
+                }
+
+                missingCount++;
+            }
+
+            // Download any that are missing from both locations
+            if (missingCount > 0)
+            {
+                await AnsiConsole.Progress().StartAsync(async ctx =>
+                {
+                    var task1 = ctx.AddTask($"[green]Saving {missingCount} missing archive indices[/]");
+                    task1.MaxValue = missingCount;
+                    await Parallel.ForEachAsync(Enumerable.Range(0, indices.Length),
+                        new ParallelOptions { MaxDegreeOfParallelism = 20 },
+                        async (i, ct) =>
+                        {
+                            var indexKey = indices[i];
+                            var savePath = Path.Combine(saveDir, indexKey + ".index");
+                            if (File.Exists(savePath)) return;
+
+                            // Download and save
+                            _ = await ArchiveIndex.GetDataIndex(cdn, indexKey, pathType, data_dir, null, (ushort)i);
+                            task1.Increment(1);
+                        });
+                });
+            }
         }
 
         return indexGroup;
@@ -656,7 +710,7 @@ public partial class Product
         for (var i = 0; i < 16; i++)
         {
             var bucket = (byte)i;
-            var path = Path.Combine(dataDir, $"{bucket:X2}000000{idxN:X2}.idx");
+            var path = Path.Combine(dataDir, $"{bucket:x2}000000{idxN:x2}.idx");
             idxMap.Add(bucket, new IDX(path, bucket));
         }
     }
@@ -672,9 +726,8 @@ public partial class Product
             for (var i = 0; i < 16; i++)
             {
                 var key = segmentHeaderKeyList[d][i];
-                //var bucket = Data.cascGetBucketIndex(key);
-                //if (idxMap.TryGetValue(bucket, out var sidx))
-                foreach (var (_,sidx) in idxMap)
+                var bucket = Data.cascGetBucketIndex(key);
+                if (idxMap.TryGetValue(bucket, out var sidx))
                 {
                     _ = sidx.Add(new Hash(key), d, i * 30, 30);
                 }
@@ -687,6 +740,91 @@ public partial class Product
                 File.Delete(idx.Path);
 
             idx.Write();
+        }
+    }
+
+    void WriteProductIDX()
+    {
+        if (_data_dir == null) return;
+        var productDir = Path.Combine(_data_dir, _product);
+        IDXV8.WriteProductIndex(productDir);
+    }
+
+    void WriteShmemFiles()
+    {
+        if (_data_dir == null) return;
+
+        var bucketVersions = new uint[16];
+        Array.Fill(bucketVersions, 1u); // We write version 1 IDX files
+
+        // Data/data/shmem
+        var gameDataDir = Path.Combine(_data_dir, "data");
+        var gameDataPath = NormalizePath(gameDataDir);
+        var dataFileCount = 0u;
+        if (Directory.Exists(gameDataDir))
+            dataFileCount = (uint)Directory.GetFiles(gameDataDir, "data.*").Length;
+        Shmem.Write(gameDataDir, gameDataPath, bucketVersions, dataFileCount);
+
+        // Data/{product}/shmem (product-specific directory)
+        var productDir = Path.Combine(_data_dir, _product);
+        var productPath = NormalizePath(productDir);
+        Shmem.Write(productDir, productPath, bucketVersions, 0);
+    }
+
+    void WriteEcacheDirectories()
+    {
+        if (_data_dir == null) return;
+
+        // ecache - encoding cache container (IDX files + shmem, no data file initially)
+        var ecacheDir = Path.Combine(_data_dir, "ecache");
+        WriteEmptyCascContainer(ecacheDir);
+    }
+
+    void WriteExtractDirectory()
+    {
+        if (_data_dir == null) return;
+
+        // .extract directory is only created for bootstrapper (BTS) products
+        // whose data dir is inside .battle.net/
+        if (!_data_dir.Contains(".battle.net")) return;
+
+        var extractDir = Path.Combine(_data_dir, ".extract");
+        if (!Directory.Exists(extractDir))
+            Directory.CreateDirectory(extractDir);
+    }
+
+    void WriteEmptyCascContainer(string dir, bool includeDataFile = false)
+    {
+        if (!Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        // Write 16 empty v7 IDX files (one per bucket, version 1)
+        for (var i = 0; i < 16; i++)
+        {
+            var bucket = (byte)i;
+            var path = Path.Combine(dir, $"{bucket:x2}00000001.idx");
+            if (!File.Exists(path))
+            {
+                var idx = new IDX(path, bucket);
+                idx.Write();
+            }
+        }
+
+        // Write shmem
+        var normalizedPath = NormalizePath(dir);
+        var bucketVersions = new uint[16];
+        Array.Fill(bucketVersions, 1u);
+        Shmem.Write(dir, normalizedPath, bucketVersions, 0);
+
+        // Write empty data.000 (just segment headers) if requested
+        if (includeDataFile)
+        {
+            var dataPath = Path.Combine(dir, "data.000");
+            if (!File.Exists(dataPath))
+            {
+                var data = new Data(0, out _, NormalizePath(Path.GetDirectoryName(dir)!));
+                data.Finalize(dir);
+            }
         }
     }
 
@@ -708,7 +846,21 @@ public partial class Product
         }
     }
 
-    string _baseDir = "World of Warcraft";
+    string _baseDir = "";
+
+    /// <summary>
+    /// Normalizes a path to match Agent's TACT path format:
+    /// forward slashes, lowercase drive letter, no trailing separator.
+    /// </summary>
+    static string NormalizePath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var normalized = fullPath.Replace('\\', '/');
+        // Lowercase drive letter (e.g., "C:/" -> "c:/")
+        if (normalized.Length >= 2 && normalized[1] == ':')
+            normalized = char.ToLower(normalized[0]) + normalized[1..];
+        return normalized.TrimEnd('/');
+    }
 
     async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size, bool truncateKey = false)
     {
@@ -931,7 +1083,7 @@ public partial class Product
             return;
 
         var filePath = Path.Combine(shared_game_dir, ".flavor.info");
-        using var sw = new StreamWriter(filePath);
+        using var sw = new StreamWriter(filePath) { NewLine = "\n" };
         sw.WriteLine("Product Flavor!STRING:0");
         sw.WriteLine(version?.Product);
     }

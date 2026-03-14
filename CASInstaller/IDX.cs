@@ -95,8 +95,11 @@ public class IDX
         if (entryBytes != null)
             bw.Write(entryBytes);
         
-        // Pad to 196608 bytes
-        var paddingSize = 196608 - fs.Length;
+        // Pad to next 64KB boundary (matching Agent behavior)
+        const int BLOCK_SIZE = 65536;
+        var minSize = Math.Max(fs.Length, BLOCK_SIZE); // at least 64KB
+        var paddedSize = (minSize + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+        var paddingSize = paddedSize - fs.Length;
         if (paddingSize > 0)
         {
             var padding = new byte[paddingSize];
