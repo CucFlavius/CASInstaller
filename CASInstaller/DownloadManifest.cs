@@ -139,11 +139,16 @@ public class DownloadManifest
 
         using var ms = new MemoryStream(data);
         await using var blte = new BLTE.BLTEStream(ms, default);
-        using var fso = new MemoryStream();
-        await blte.CopyToAsync(fso);
-        data = fso.ToArray();
+        var decompressed = new byte[blte.Length];
+        int readOffset = 0;
+        while (readOffset < decompressed.Length)
+        {
+            var read = blte.Read(decompressed, readOffset, decompressed.Length - readOffset);
+            if (read == 0) break;
+            readOffset += read;
+        }
 
-        return new DownloadManifest(data);
+        return new DownloadManifest(decompressed);
     }
 
     public override string ToString()

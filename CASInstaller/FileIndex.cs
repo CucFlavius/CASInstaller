@@ -61,7 +61,7 @@ public struct FileIndex
                 blockRecordsRead++;
             }
 
-            br.ReadBytes(indexBlockSize - (blockRecordsRead * recordSize));
+            br.BaseStream.Position += indexBlockSize - (blockRecordsRead * recordSize);
         }
     }
 

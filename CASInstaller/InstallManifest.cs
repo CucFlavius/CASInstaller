@@ -62,20 +62,18 @@ public class InstallManifest
         public string name;
         public Hash contentHash;
         public uint size;
-        public HashSet<int> tagIndices;
+        public int tagIndices;
 
         public InstallFileEntry(BinaryReader br, int numTags, int hashSize, int i, TagInfo[] tags)
         {
             name = br.ReadCString();
             contentHash = new Hash(br.ReadBytes(hashSize));
             size = br.ReadUInt32(true);
-            tagIndices = [];
+            tagIndices = 0;
             for (var j = 0; j < numTags; j++)
             {
-                if (tags[j].bitmap[i] == true)
-                {
-                    tagIndices.Add(j);
-                }
+                if (tags[j].bitmap[i])
+                    tagIndices |= (1 << j);
             }
         }
     }
@@ -87,11 +85,16 @@ public class InstallManifest
 
         using var ms = new MemoryStream(data);
         await using var blte = new BLTE.BLTEStream(ms, default);
-        using var fso = new MemoryStream();
-        await blte.CopyToAsync(fso);
-        data = fso.ToArray();
+        var decompressed = new byte[blte.Length];
+        int readOffset = 0;
+        while (readOffset < decompressed.Length)
+        {
+            var read = blte.Read(decompressed, readOffset, decompressed.Length - readOffset);
+            if (read == 0) break;
+            readOffset += read;
+        }
 
-        return new InstallManifest(data);
+        return new InstallManifest(decompressed);
     }
 
     public override string ToString()

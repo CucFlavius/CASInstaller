@@ -283,11 +283,16 @@ public static class Extensions
     /// </summary>
     public static string ReadCString(this BinaryReader reader, System.Text.Encoding encoding)
     {
-        var bytes = new List<byte>();
+        var buffer = new byte[128];
+        int len = 0;
         byte b;
         while ((b = reader.ReadByte()) != 0)
-            bytes.Add(b);
-        return encoding.GetString(bytes.ToArray());
+        {
+            if (len == buffer.Length)
+                Array.Resize(ref buffer, buffer.Length * 2);
+            buffer[len++] = b;
+        }
+        return encoding.GetString(buffer, 0, len);
     }
     
     public static byte[] ToByteArray(this string? str)

@@ -27,11 +27,7 @@ public readonly struct Hash : IEquatable<Hash>, IComparable<Hash>
 
     public Hash(string? hexKey)
     {
-        Key = new byte[hexKey.Length / 2];
-        for (var i = 0; i < hexKey.Length; i += 2)
-        {
-            Key[i / 2] = byte.Parse(hexKey.Substring(i, 2), System.Globalization.NumberStyles.HexNumber);
-        }
+        Key = Convert.FromHexString(hexKey!);
     }
 
     public bool Equals(Hash other)
@@ -72,8 +68,10 @@ public readonly struct Hash : IEquatable<Hash>, IComparable<Hash>
         return Key.AsSpan().SequenceEqual(blockHash);
     }
 
+    private static readonly byte[] EmptyKey = new byte[16];
+
     public bool IsEmpty()
     {
-        return Key.AsSpan().SequenceEqual(new byte[16]);
+        return Key.AsSpan().SequenceEqual(EmptyKey);
     }
 }

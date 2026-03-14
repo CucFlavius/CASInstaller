@@ -7,6 +7,17 @@ public class CDNOnline : CDN
 {
     HttpClient? _client;
 
+    private static readonly SocketsHttpHandler _sharedHandler = new()
+    {
+        MaxConnectionsPerServer = 24,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    };
+
+    private static readonly HttpClient _sharedClient = new(_sharedHandler)
+    {
+        Timeout = TimeSpan.FromMinutes(10)
+    };
+
     CDNOnline(string? product, string? data) : base(product)
     {
         if (string.IsNullOrEmpty(data))
@@ -27,8 +38,7 @@ public class CDNOnline : CDN
         Servers = parts[3]?.Split(' ') ?? [];
         ConfigPath = parts[4] ?? "";
 
-        _client = new HttpClient();
-        _client.Timeout = new TimeSpan(0, 10, 0);
+        _client = _sharedClient;
     }
 
     static async Task<List<CDN>> GetAllCDN(string? product)
@@ -36,7 +46,7 @@ public class CDNOnline : CDN
         var url = $@"http://us.patch.battle.net:1119/{product}/cdns";
 
         byte[]? data = null;
-        var client = new HttpClient();
+        var client = _sharedClient;
         try
         {
             data = await client.GetByteArrayAsync(url);
@@ -92,7 +102,7 @@ public class CDNOnline : CDN
         if (url == null)
             throw new Exception("CDN.GetDataFromURL URL is null");
 
-        _client ??= new HttpClient();
+        _client ??= _sharedClient;
 
         byte[]? data = null;
 
@@ -119,7 +129,7 @@ public class CDNOnline : CDN
 
     async Task<byte[]?> GetDataFromURL(string url)
     {
-        _client ??= new HttpClient();
+        _client ??= _sharedClient;
 
         try
         {

@@ -306,71 +306,83 @@ public partial class Product
 
             }
 
-            // Phase 1: Parallel pre-download to cache
+            // Pipeline: concurrent download + sequential write with bin-packing
+            // Downloads feed directly into the writer, avoiding cache re-reads.
             await AnsiConsole.Progress().StartAsync(async ctx =>
             {
-                var task1 = ctx.AddTask($"[green]Pre-downloading {allWriteEntries.Count} files[/]");
-                task1.MaxValue = allWriteEntries.Count;
-                await Parallel.ForEachAsync(allWriteEntries,
-                    new ParallelOptions { MaxDegreeOfParallelism = 20 },
-                    async (entry, ct) =>
-                    {
-                        await Data.PreDownloadToCache(entry.eKey, _cdn, _cdnConfig, _archiveGroup);
-                        task1.Increment(1);
-                    });
-            });
+                var dlProgress = ctx.AddTask($"[green]Downloading {allWriteEntries.Count} files[/]");
+                dlProgress.MaxValue = allWriteEntries.Count;
+                var wrProgress = ctx.AddTask($"[green]Writing files to data archives[/]");
+                wrProgress.MaxValue = allWriteEntries.Count;
 
-            // Phase 2: Sequential write with bin-packing
-            // When an entry doesn't fit in the current data file, defer it.
-            // After trying all entries, finalize the data file and repeat with deferred entries.
-            await AnsiConsole.Progress().StartAsync(async ctx =>
-            {
-                var task1 = ctx.AddTask($"[green]Writing {allWriteEntries.Count} files to data archives[/]");
-                task1.MaxValue = allWriteEntries.Count;
-                var pending = allWriteEntries;
+                // Per-entry completion sources for downloaded data
+                var downloadResults = new TaskCompletionSource<byte[]?>[allWriteEntries.Count];
+                for (int i = 0; i < allWriteEntries.Count; i++)
+                    downloadResults[i] = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                // Producer: download entries in parallel
+                var downloadJob = Task.Run(async () =>
+                {
+                    await Parallel.ForEachAsync(
+                        Enumerable.Range(0, allWriteEntries.Count),
+                        new ParallelOptions { MaxDegreeOfParallelism = 20 },
+                        async (i, ct) =>
+                        {
+                            var entry = allWriteEntries[i];
+                            byte[]? data = null;
+                            if (_archiveGroup != null && _archiveGroup.TryGetValue(entry.eKey, out var indexEntry))
+                                data = await Data.DownloadFileFromIndex(indexEntry, _cdn, _cdnConfig);
+                            else
+                                data = await Data.DownloadFileDirectly(entry.eKey, _cdn);
+                            downloadResults[i].SetResult(data);
+                            dlProgress.Increment(1);
+                        });
+                });
+
+                // Consumer: sequential write with bin-packing
+                var pending = Enumerable.Range(0, allWriteEntries.Count).ToList();
                 while (pending.Count > 0)
                 {
-                    var deferred = new List<(Hash eKey, ulong size, bool truncateKey)>();
-                    foreach (var entry in pending)
+                    var deferred = new List<int>();
+                    foreach (var i in pending)
                     {
+                        var entry = allWriteEntries[i];
                         var writeSize = (long)entry.size + 30;
 
-                        // Ensure Working_Data exists
                         if (Working_Data == null)
                         {
                             segmentHeaderKeyList ??= [];
-                            Working_Data = new Data(segmentHeaderKeyList.Count, out var shk, _baseDir);
+                            Working_Data = new Data(segmentHeaderKeyList.Count, out var shk, _baseDir, _gameDataDir!);
                             segmentHeaderKeyList.Add(shk);
                         }
 
                         if (!Working_Data.CanWrite(writeSize))
                         {
-                            deferred.Add(entry);
+                            deferred.Add(i);
                             continue;
                         }
 
-                        await DownloadAndWriteFile(entry.eKey, _cdn, _cdnConfig, _archiveGroup, entry.size, entry.truncateKey);
-                        task1.Increment(1);
+                        var data = await downloadResults[i].Task;
+                        if (data != null)
+                            WriteEntryDirect(entry.eKey, entry.size, data, entry.truncateKey);
+                        wrProgress.Increment(1);
                     }
 
-                    if (deferred.Count > 0)
+                    if (deferred.Count > 0 && Working_Data != null)
                     {
-                        // Finalize current data file, next iteration creates a new one
-                        if (Working_Data != null && _gameDataDir != null)
-                        {
-                            Working_Data.Finalize(_gameDataDir);
-                            Working_Data = null;
-                            GC.Collect();
-                        }
+                        Working_Data.FinalizeAndClose();
+                        Working_Data = null;
                     }
                     pending = deferred;
                 }
+
+                await downloadJob;
             });
             AnsiConsole.MarkupLine($"[bold green]Write complete: {allWriteEntries.Count} files[/]");
             await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir, _branch);
         }
 
-        if (_gameDataDir != null) Working_Data?.Finalize(_gameDataDir);
+        if (_gameDataDir != null) Working_Data?.FinalizeAndClose();
 
         WriteIDXMap();
         WriteProductIDX();
@@ -620,9 +632,15 @@ public partial class Product
                 // Decode BLTE, install files must be extracted
                 using var ms = new MemoryStream(data);
                 await using var blte = new BLTE.BLTEStream(ms, default);
-                using var fso = new MemoryStream();
-                await blte.CopyToAsync(fso);
-                data = fso.ToArray();
+                var decompressed = new byte[blte.Length];
+                int readOffset = 0;
+                while (readOffset < decompressed.Length)
+                {
+                    var read = blte.Read(decompressed, readOffset, decompressed.Length - readOffset);
+                    if (read == 0) break;
+                    readOffset += read;
+                }
+                data = decompressed;
             }
             catch (Exception e)
             {
@@ -853,8 +871,8 @@ public partial class Product
             var dataPath = Path.Combine(dir, "data.000");
             if (!File.Exists(dataPath))
             {
-                var data = new Data(0, out _, NormalizePath(Path.GetDirectoryName(dir)!));
-                data.Finalize(dir);
+                var data = new Data(0, out _, NormalizePath(Path.GetDirectoryName(dir)!), dir);
+                data.FinalizeAndClose();
             }
         }
     }
@@ -893,6 +911,28 @@ public partial class Product
         return normalized.TrimEnd('/');
     }
 
+    /// <summary>
+    /// Write an entry directly with pre-downloaded data (used by the pipeline).
+    /// Caller must ensure Working_Data exists and can fit the entry.
+    /// </summary>
+    void WriteEntryDirect(Hash eKey, ulong size, byte[] data, bool truncateKey)
+    {
+        var writeSize = size + 30;
+        var bucket = Data.cascGetBucketIndex(eKey);
+
+        if (idxMap == null)
+            throw new NullReferenceException("idxMap");
+
+        if (idxMap.TryGetValue(bucket, out var idx))
+        {
+            var idxEntry = idx.Add(eKey, Working_Data!.ID, (int)Working_Data.Offset, writeSize);
+            var actualSize = Working_Data.WriteDataEntry(idxEntry, data, truncateKey);
+
+            if (actualSize > 0 && actualSize != writeSize)
+                idxEntry.Size = actualSize;
+        }
+    }
+
     async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size, bool truncateKey = false)
     {
         var writeSize = size + 30;
@@ -906,7 +946,7 @@ public partial class Product
 
         if (Working_Data == null)
         {
-            Working_Data = new Data(0, out var segmentHeaderKeys, _baseDir);
+            Working_Data = new Data(0, out var segmentHeaderKeys, _baseDir, _gameDataDir);
             segmentHeaderKeyList = [ segmentHeaderKeys ];
         }
 
@@ -914,11 +954,10 @@ public partial class Product
         {
             if (!Working_Data.CanWrite((int)writeSize))
             {
-                Working_Data.Finalize(_gameDataDir);
+                Working_Data.FinalizeAndClose();
                 var currentID = Working_Data.ID;
-                Working_Data = new Data(currentID + 1, out var segmentHeaderKeys, _baseDir);
+                Working_Data = new Data(currentID + 1, out var segmentHeaderKeys, _baseDir, _gameDataDir);
                 segmentHeaderKeyList.Add(segmentHeaderKeys);
-                GC.Collect();
             }
 
             var idxEntry = idx.Add(eKey, Working_Data.ID, (int)Working_Data.Offset, writeSize);

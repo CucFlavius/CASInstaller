@@ -16,7 +16,6 @@ internal class DataBlock
 public class BLTEStream : Stream
 {
     private BinaryReader _reader;
-    private readonly MD5 _md5 = MD5.Create();
     private MemoryStream _memStream;
     private DataBlock[] _dataBlocks;
     private Stream _stream;

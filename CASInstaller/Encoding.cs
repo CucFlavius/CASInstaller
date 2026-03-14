@@ -32,7 +32,7 @@ public class Encoding
         public ushort keyCount;
         public uint size;
         public Hash cKey;
-        public List<Hash> eKeys;
+        public Hash[] eKeys;
     }
 
     public struct FileDescEntry
@@ -109,12 +109,12 @@ public class Encoding
                     keyCount = keysCount,
                     size = br.ReadUInt32(true),
                     cKey = new Hash(br),
-                    eKeys = new List<Hash>()
+                    eKeys = new Hash[keysCount]
                 };
 
                 for (int key = 0; key < entry.keyCount; key++)
                 {
-                    entry.eKeys.Add(new Hash(br));
+                    entry.eKeys[key] = new Hash(br);
                 }
 
                 contentEntries.Add(entry.cKey, entry);
@@ -194,9 +194,15 @@ public class Encoding
             if (data == null) throw new Exception($"Failed to download encoding file: {key}");
             using var ms = new MemoryStream(data);
             await using var blte = new BLTE.BLTEStream(ms, default);
-            using var fso = new MemoryStream();
-            await blte.CopyToAsync(fso);
-            return new Encoding(fso.ToArray(), parseTableB, checkStuff);
+            var decompressed = new byte[blte.Length];
+            int readOffset = 0;
+            while (readOffset < decompressed.Length)
+            {
+                var read = blte.Read(decompressed, readOffset, decompressed.Length - readOffset);
+                if (read == 0) break;
+                readOffset += read;
+            }
+            return new Encoding(decompressed, parseTableB, checkStuff);
         }
         else
         {
@@ -204,7 +210,6 @@ public class Encoding
             return new Encoding(data, parseTableB, checkStuff);
         }
 
-        throw new Exception("Failed to download encoding file.");
     }
 
     public override string ToString()
