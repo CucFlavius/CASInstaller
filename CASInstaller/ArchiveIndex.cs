@@ -121,32 +121,60 @@ public struct ArchiveIndex
         if (cdn == null || key.IsEmpty())
             return new ArchiveIndex([], index, archiveGroup);
 
-        var saveDir = Path.Combine(data_dir ?? "", "indices");
-        var savePath = Path.Combine(saveDir, key + ".index");
+        var cacheDir = Path.Combine("cache", "indices");
+        var cachePath = Path.Combine(cacheDir, key + ".index");
+        var saveDir = data_dir != null ? Path.Combine(data_dir, "indices") : null;
+        var savePath = saveDir != null ? Path.Combine(saveDir, key + ".index") : null;
 
-        if (File.Exists(savePath))
+        // Check persistent cache first
+        if (File.Exists(cachePath))
         {
-            var data = await File.ReadAllBytesAsync(savePath);
+            var data = await File.ReadAllBytesAsync(cachePath);
+            // Also copy to install dir if needed
+            if (savePath != null && !File.Exists(savePath))
+            {
+                if (!Directory.Exists(saveDir!))
+                    Directory.CreateDirectory(saveDir!);
+                await File.WriteAllBytesAsync(savePath, data);
+            }
             return new ArchiveIndex(data, index, archiveGroup);
         }
-        else
+
+        // Check install-local dir
+        if (savePath != null && File.Exists(savePath))
         {
-            var hosts = cdn?.Hosts;
-            if (hosts == null)
-                return new ArchiveIndex([], index, archiveGroup);
-            foreach (var cdnURL in hosts)
+            var data = await File.ReadAllBytesAsync(savePath);
+            // Also save to persistent cache
+            if (!Directory.Exists(cacheDir))
+                Directory.CreateDirectory(cacheDir);
+            await File.WriteAllBytesAsync(cachePath, data);
+            return new ArchiveIndex(data, index, archiveGroup);
+        }
+
+        // Download from CDN
+        var hosts = cdn?.Hosts;
+        if (hosts == null)
+            return new ArchiveIndex([], index, archiveGroup);
+
+        foreach (var cdnURL in hosts)
+        {
+            var data = pathType == "data" ? await cdn.GetDataIndex(key) : await cdn.GetPatchIndex(key);
+            if (data == null) continue;
+
+            // Save to persistent cache
+            if (!Directory.Exists(cacheDir))
+                Directory.CreateDirectory(cacheDir);
+            await File.WriteAllBytesAsync(cachePath, data);
+
+            // Save to install dir
+            if (saveDir != null)
             {
-                var data = pathType == "data" ? await cdn.GetData(key) : await cdn.GetPatch(key);
-                if (data == null) continue;
-
-                if (data_dir == null) return new ArchiveIndex(data, index, archiveGroup);
-
                 if (!Directory.Exists(saveDir))
                     Directory.CreateDirectory(saveDir);
-                await File.WriteAllBytesAsync(savePath, data);
-
-                return new ArchiveIndex(data, index, archiveGroup);
+                await File.WriteAllBytesAsync(savePath!, data);
             }
+
+            return new ArchiveIndex(data, index, archiveGroup);
         }
 
         return new ArchiveIndex([], index, archiveGroup);

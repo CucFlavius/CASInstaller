@@ -101,6 +101,7 @@ public class CDNOnline : CDN
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new RangeHeaderValue(start, start + size - 1);
             var response = await _client?.SendAsync(request)!;
+            response.EnsureSuccessStatusCode();
             data = await response.Content.ReadAsByteArrayAsync();
         }
         catch (HttpRequestException re)
@@ -240,7 +241,7 @@ public class CDNOnline : CDN
         {
             try
             {
-                var encryptedData = await GetDataFromURL($"http://{host}/{Path}/{key.UrlString}", start, size);
+                var encryptedData = await GetDataFromURL($"http://{host}/{Path}/data/{key.UrlString}", start, size);
                 if (encryptedData == null) continue;
                 data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
             }
@@ -282,17 +283,26 @@ public class CDNOnline : CDN
             throw new Exception("CDN.GetCDNConfig Key is empty");
 
         byte[]? data = null;
-        foreach (var host in Hosts)
+
+        // Try ConfigPath first, then fall back to Path/config
+        var configPaths = new[] { ConfigPath, $"{Path}/config" };
+
+        foreach (var configPath in configPaths)
         {
-            try
+            foreach (var host in Hosts)
             {
-                var encryptedData = await GetDataFromURL($"http://{host}/{ConfigPath}/{key.UrlString}");
-                if (encryptedData == null) continue;
-                data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
-            }
-            catch (Exception e)
-            {
-                AnsiConsole.WriteException(e);
+                try
+                {
+                    var encryptedData = await GetDataFromURL($"http://{host}/{configPath}/{key.UrlString}");
+                    if (encryptedData == null) continue;
+                    data = ArmadilloCrypt.Instance == null ? encryptedData : ArmadilloCrypt.Instance?.DecryptData(key, encryptedData);
+                }
+                catch (Exception e)
+                {
+                    AnsiConsole.WriteException(e);
+                }
+
+                if (data != null) return data;
             }
         }
 

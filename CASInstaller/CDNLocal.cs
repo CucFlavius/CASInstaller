@@ -4,6 +4,10 @@ namespace CASInstaller;
 
 public class CDNLocal : CDN
 {
+    // Original CDN info for .build.info (not used for downloading)
+    public string[]? OriginalHosts { get; private set; }
+    public string[]? OriginalServers { get; private set; }
+
     public CDNLocal(string product, string path) : base(product)
     {
         Hosts = [path];
@@ -17,6 +21,9 @@ public class CDNLocal : CDN
         }
         Path = realCdn.Path;
         ConfigPath = realCdn.ConfigPath;
+        Name = realCdn.Name;
+        OriginalHosts = realCdn.Hosts;
+        OriginalServers = realCdn.Servers;
     }
 
     byte[] GetDataFromPath(string url, int start, int size)

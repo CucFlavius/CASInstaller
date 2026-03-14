@@ -46,6 +46,9 @@ public partial class Product
     {
         if (!Directory.Exists(cache_dir))
             Directory.CreateDirectory(cache_dir);
+        var cacheIndicesDir = Path.Combine(cache_dir, "indices");
+        if (!Directory.Exists(cacheIndicesDir))
+            Directory.CreateDirectory(cacheIndicesDir);
 
         _installPath = installPath;
 
@@ -71,9 +74,13 @@ public partial class Product
             }
 
             if (_installSettings.OverrideCDNConfig != null)
-                    _version.CdnConfigHash = new Hash(_installSettings.OverrideCDNConfig);
+                _version.CdnConfigHash = new Hash(_installSettings.OverrideCDNConfig);
+            else if (_installSettings.OverrideCDNConfigFile != null)
+                _version.CdnConfigHash = new Hash(Path.GetFileName(_installSettings.OverrideCDNConfigFile));
             if (_installSettings.OverrideBuildConfig != null)
-                    _version.BuildConfigHash = new Hash(_installSettings.OverrideBuildConfig);
+                _version.BuildConfigHash = new Hash(_installSettings.OverrideBuildConfig);
+            else if (_installSettings.OverrideBuildConfigFile != null)
+                _version.BuildConfigHash = new Hash(Path.GetFileName(_installSettings.OverrideBuildConfigFile));
             //_version?.LogInfo();
 
             // Fetch and load keyring if available
@@ -104,6 +111,13 @@ public partial class Product
                 _cdnConfig = new CDNConfig(System.Text.Encoding.UTF8.GetString(await File.ReadAllBytesAsync(_installSettings.OverrideCDNConfigFile)));
             else
                 _cdnConfig = await CDNConfig.GetConfig(_cdn, _version.CdnConfigHash, _data_dir);
+
+            // Always save config files to install directory for TACT initialization
+            if (_data_dir != null)
+            {
+                await SaveConfigToInstall(_version.BuildConfigHash, _installSettings.OverrideBuildConfigFile, _data_dir);
+                await SaveConfigToInstall(_version.CdnConfigHash, _installSettings.OverrideCDNConfigFile, _data_dir);
+            }
             //_cdnConfig?.LogInfo();
 
             if (_cdnConfig != null)
@@ -127,6 +141,7 @@ public partial class Product
                 //_encoding?.Dump("encoding.txt");
 
                 _download = await DownloadManifest.GetDownload(_cdn, _buildConfig.Value.Download[1]);
+                _download?.Dump($"download_manifest_analysis_{_product}.txt");
                 //_download?.LogInfo();
 
                 _install = await InstallManifest.GetInstall(_cdn, _buildConfig.Value.Install[1]);
@@ -141,18 +156,214 @@ public partial class Product
 
             BuildIDXMap(_gameDataDir);
 
-            await DownloadAndWriteFile((Hash)_buildConfig?.Download[1]!, _cdn, _cdnConfig, _archiveGroup,
-                (ulong)int.Parse(_buildConfig?.DownloadSize[1]!));
-            await DownloadAndWriteFile((Hash)_buildConfig?.Install[1]!, _cdn, _cdnConfig, _archiveGroup,
-                (ulong)int.Parse(_buildConfig?.InstallSize[1]!));
-            await DownloadAndWriteFile((Hash)_buildConfig?.Encoding[1]!, _cdn, _cdnConfig, _archiveGroup,
-                (ulong)int.Parse(_buildConfig?.EncodingSize[1]!));
-            await DownloadAndWriteFile((Hash)_buildConfig?.Size[1]!, _cdn, _cdnConfig, _archiveGroup,
-                (ulong)int.Parse(_buildConfig?.SizeSize[1]!));
+            // Collect all entries to write: special entries (sorted by key, patch-index last) first, then download entries
+            var allWriteEntries = new List<(Hash eKey, ulong size, bool truncateKey)>();
 
-            await ProcessDownload(_download, _cdn, _cdnConfig, _encoding, _archiveGroup, _patchGroup, _installTags,
-                _data_dir);
-            await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir);
+            // Special entries (full 16-byte key, no truncation) - sorted by eKey, deduplicated
+            var specialEntries = new List<(Hash eKey, ulong size, bool truncateKey)>();
+            var specialKeysSeen = new HashSet<Hash>();
+            (Hash eKey, ulong size, bool truncateKey)? patchIndexEntry = null;
+
+            // Add encoding, download, install (sorted among VFS entries)
+            specialEntries.Add(((Hash)_buildConfig?.Download[1]!, (ulong)int.Parse(_buildConfig?.DownloadSize[1]!), false));
+            specialEntries.Add(((Hash)_buildConfig?.Install[1]!, (ulong)int.Parse(_buildConfig?.InstallSize[1]!), false));
+            specialEntries.Add(((Hash)_buildConfig?.Encoding[1]!, (ulong)int.Parse(_buildConfig?.EncodingSize[1]!), false));
+            specialKeysSeen.Add((Hash)_buildConfig?.Download[1]!);
+            specialKeysSeen.Add((Hash)_buildConfig?.Install[1]!);
+            specialKeysSeen.Add((Hash)_buildConfig?.Encoding[1]!);
+
+            // Patch-index is written LAST in the sorted section (not at its key-sorted position)
+            if (_buildConfig?.PatchIndex != null && _buildConfig?.PatchIndexSize != null
+                && _buildConfig.Value.PatchIndex.Length >= 2 && _buildConfig.Value.PatchIndexSize.Length >= 2)
+            {
+                var piKey = new Hash(_buildConfig.Value.PatchIndex[1]);
+                patchIndexEntry = (piKey, (ulong)int.Parse(_buildConfig.Value.PatchIndexSize[1]), false);
+                specialKeysSeen.Add(piKey);
+            }
+
+            // VFS entries (deduplicated by eKey)
+            if (_buildConfig?.VfsEntries != null)
+            {
+                foreach (var vfs in _buildConfig.Value.VfsEntries)
+                {
+                    if (specialKeysSeen.Add(vfs.EKey))
+                        specialEntries.Add((vfs.EKey, (ulong)vfs.EncodedSize, false));
+                }
+            }
+
+            // Sort by eKey ascending
+            specialEntries.Sort((a, b) =>
+            {
+                var ka = a.eKey.Key;
+                var kb = b.eKey.Key;
+                for (int i = 0; i < Math.Min(ka.Length, kb.Length); i++)
+                {
+                    int cmp = ka[i].CompareTo(kb[i]);
+                    if (cmp != 0) return cmp;
+                }
+                return ka.Length.CompareTo(kb.Length);
+            });
+            allWriteEntries.AddRange(specialEntries);
+
+            // Append patch-index at the end of sorted section
+            if (patchIndexEntry != null)
+                allWriteEntries.Add(patchIndexEntry.Value);
+
+            // Build artifact exclusion set from install manifest eKeys
+            var artifactKeys = new HashSet<Hash>();
+            if (_install != null && _encoding != null)
+            {
+                var installTagQuery = TagFilter.BuildTagQuery(_installTags, "enUS",
+                    _branch.ToUpperInvariant() switch { "US" => "US", "EU" => "EU", "KR" => "KR", "TW" => "TW", "CN" => "CN", _ => "US" });
+                var installFilterBitmap = TagFilter.FilterInstallEntries(_install, installTagQuery);
+                for (var i = 0; i < _install.entries.Length; i++)
+                {
+                    if (!installFilterBitmap[i]) continue;
+                    if (_encoding.contentEntries.TryGetValue(_install.entries[i].contentHash, out var ce))
+                        artifactKeys.Add(ce.eKeys[0]);
+                }
+            }
+
+            // Download entries (truncated 9-byte key)
+            // Combined tag filter, sorted by (CDN config index, archiveOffset) with loose entries interleaved
+            if (_download != null)
+            {
+                var region = _branch.ToUpperInvariant() switch
+                {
+                    "US" => "US", "EU" => "EU", "KR" => "KR", "TW" => "TW", "CN" => "CN", _ => "US"
+                };
+                var tagQuery = TagFilter.BuildTagQuery(_installTags, "enUS", region);
+                var downloadBitmap = TagFilter.FilterDownloadEntries(_download, tagQuery);
+
+                // Build exclusion sets
+                var excludeKeys = new HashSet<Hash>(specialKeysSeen);
+                foreach (var ak in artifactKeys) excludeKeys.Add(ak);
+
+                // Collect entries per priority
+                var priorityGroups = new SortedDictionary<int, List<DownloadManifest.DownloadEntry>>();
+                for (var i = 0; i < _download.entries.Length; i++)
+                {
+                    var entry = _download.entries[i];
+                    if (entry.priority is not (0 or 1 or 2)) continue;
+                    if (!downloadBitmap[i]) continue;
+                    if (excludeKeys.Contains(entry.eKey)) continue;
+                    if (entry.size == 0) continue;
+
+                    var prio = (int)entry.priority;
+                    if (!priorityGroups.ContainsKey(prio))
+                        priorityGroups[prio] = new List<DownloadManifest.DownloadEntry>();
+                    priorityGroups[prio].Add(entry);
+                }
+
+                AnsiConsole.MarkupLine($"[yellow]Download entries by priority: {string.Join(", ", priorityGroups.Select(kv => $"p{kv.Key}={kv.Value.Count}"))} total={priorityGroups.Sum(kv => kv.Value.Count)}[/]");
+
+                // Precompute: sorted archive hashes for binary search → CDN config index mapping
+                var archives = _cdnConfig!.Value.Archives!;
+                var sortedArchivesList = archives
+                    .Select((h, i) => (hash: h, cdnIdx: i))
+                    .OrderBy(x => x.hash)
+                    .ToArray();
+                var sortedArchiveHashes = sortedArchivesList.Select(x => x.hash).ToArray();
+
+                // Sort by (CDN config index, offset) with loose entries interleaved
+                foreach (var (prio, entries) in priorityGroups)
+                {
+                    var sortedEntries = new List<(DownloadManifest.DownloadEntry entry, int groupPos, bool isLoose, uint archOff)>();
+                    var seenKeys = new HashSet<Hash>();
+
+                    foreach (var entry in entries)
+                    {
+                        if (!seenKeys.Add(entry.eKey)) continue;
+                        if (_archiveGroup != null && _archiveGroup.TryGetValue(entry.eKey, out var idx))
+                        {
+                            sortedEntries.Add((entry, idx.archiveIndex, false, idx.offset));
+                        }
+                        else
+                        {
+                            var insertPos = Array.BinarySearch(sortedArchiveHashes, entry.eKey);
+                            if (insertPos < 0) insertPos = ~insertPos - 1;
+                            var precedingCdnIdx = insertPos >= 0 ? sortedArchivesList[insertPos].cdnIdx : -1;
+                            sortedEntries.Add((entry, precedingCdnIdx, true, 0));
+                        }
+                    }
+
+                    sortedEntries.Sort((a, b) =>
+                    {
+                        if (a.groupPos != b.groupPos) return a.groupPos.CompareTo(b.groupPos);
+                        if (a.isLoose != b.isLoose) return a.isLoose ? 1 : -1;
+                        if (!a.isLoose)
+                            return a.archOff.CompareTo(b.archOff);
+                        return a.entry.eKey.CompareTo(b.entry.eKey);
+                    });
+
+                    foreach (var (entry, _, _, _) in sortedEntries)
+                        allWriteEntries.Add((entry.eKey, entry.size, true));
+                }
+
+            }
+
+            // Phase 1: Parallel pre-download to cache
+            await AnsiConsole.Progress().StartAsync(async ctx =>
+            {
+                var task1 = ctx.AddTask($"[green]Pre-downloading {allWriteEntries.Count} files[/]");
+                task1.MaxValue = allWriteEntries.Count;
+                await Parallel.ForEachAsync(allWriteEntries,
+                    new ParallelOptions { MaxDegreeOfParallelism = 20 },
+                    async (entry, ct) =>
+                    {
+                        await Data.PreDownloadToCache(entry.eKey, _cdn, _cdnConfig, _archiveGroup);
+                        task1.Increment(1);
+                    });
+            });
+
+            // Phase 2: Sequential write with bin-packing
+            // When an entry doesn't fit in the current data file, defer it.
+            // After trying all entries, finalize the data file and repeat with deferred entries.
+            await AnsiConsole.Progress().StartAsync(async ctx =>
+            {
+                var task1 = ctx.AddTask($"[green]Writing {allWriteEntries.Count} files to data archives[/]");
+                task1.MaxValue = allWriteEntries.Count;
+                var pending = allWriteEntries;
+                while (pending.Count > 0)
+                {
+                    var deferred = new List<(Hash eKey, ulong size, bool truncateKey)>();
+                    foreach (var entry in pending)
+                    {
+                        var writeSize = (long)entry.size + 30;
+
+                        // Ensure Working_Data exists
+                        if (Working_Data == null)
+                        {
+                            segmentHeaderKeyList ??= [];
+                            Working_Data = new Data(segmentHeaderKeyList.Count, out var shk, _baseDir);
+                            segmentHeaderKeyList.Add(shk);
+                        }
+
+                        if (!Working_Data.CanWrite(writeSize))
+                        {
+                            deferred.Add(entry);
+                            continue;
+                        }
+
+                        await DownloadAndWriteFile(entry.eKey, _cdn, _cdnConfig, _archiveGroup, entry.size, entry.truncateKey);
+                        task1.Increment(1);
+                    }
+
+                    if (deferred.Count > 0)
+                    {
+                        // Finalize current data file, next iteration creates a new one
+                        if (Working_Data != null && _gameDataDir != null)
+                        {
+                            Working_Data.Finalize(_gameDataDir);
+                            Working_Data = null;
+                            GC.Collect();
+                        }
+                    }
+                    pending = deferred;
+                }
+            });
+            AnsiConsole.MarkupLine($"[bold green]Write complete: {allWriteEntries.Count} files[/]");
+            await ProcessInstall(_install, _cdn, _cdnConfig, _encoding, _archiveGroup, _installTags, _shared_game_dir, _branch);
         }
 
         if (_gameDataDir != null) Working_Data?.Finalize(_gameDataDir);
@@ -215,33 +426,41 @@ public partial class Product
 
         var saveDir = Path.Combine(data_dir ?? "", "indices");
         var groupPath = Path.Combine(saveDir, groupKey.KeyString + ".index");
+        var cacheGroupPath = Path.Combine("cache", "indices", groupKey.KeyString + ".index");
 
-        if (File.Exists(groupPath) && !overrideGroup)
+        // Check both install-local and persistent cache for group index
+        var existingGroupPath = File.Exists(groupPath) ? groupPath :
+                                File.Exists(cacheGroupPath) ? cacheGroupPath : null;
+
+        if (existingGroupPath != null && !overrideGroup)
         {
             // Load existing archive group index
             _ = await ArchiveIndex.GetDataIndex(cdn, groupKey, pathType, data_dir, indexGroup, (ushort)0);
-            //AnsiConsole.WriteLine(indexGroup.Count);
         }
         else
         {
-            AnsiConsole.Progress().Start(ctx =>
+            if (indices != null)
             {
-                if (indices == null) return;
-                var length = indices?.Length ?? 0;
-                var task1 = ctx.AddTask($"[green]Processing {indices?.Length} indices[/]");
-                task1.MaxValue = length;
-                Parallel.For(0, length, i =>
+                var length = indices.Length;
+                await AnsiConsole.Progress().StartAsync(async ctx =>
                 {
-                    var indexKey = indices[i];
-                    task1.Increment(1);
-                    _ = ArchiveIndex.GetDataIndex(cdn, indexKey, pathType, data_dir, indexGroup, (ushort)i).Result;
+                    var task1 = ctx.AddTask($"[green]Processing {length} indices[/]");
+                    task1.MaxValue = length;
+                    await Parallel.ForEachAsync(Enumerable.Range(0, length),
+                        new ParallelOptions { MaxDegreeOfParallelism = 20 },
+                        async (i, ct) =>
+                        {
+                            var indexKey = indices[i];
+                            _ = await ArchiveIndex.GetDataIndex(cdn, indexKey, pathType, data_dir, indexGroup, (ushort)i);
+                            task1.Increment(1);
+                        });
                 });
+            }
 
-            });
-
-            // Save the archive group index
+            // Save the archive group index to both locations
             if (data_dir != null)
                 ArchiveIndex.GenerateIndexGroupFile(indexGroup, groupPath, offsetBytes);
+            ArchiveIndex.GenerateIndexGroupFile(indexGroup, cacheGroupPath, offsetBytes);
         }
 
         return indexGroup;
@@ -250,50 +469,66 @@ public partial class Product
     private static async Task ProcessInstall(
         InstallManifest? install, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, List<string>? tags,
-        string? shared_game_dir, bool overrideFiles = false)
+        string? shared_game_dir, string branch = "us", bool overrideFiles = false)
     {
         if (install == null || cdn == null || encoding == null || shared_game_dir == null)
             return;
 
         tags ??= [];
-        tags.Add("enUS");
 
-        // Filter entries by tags
+        var region = branch.ToUpperInvariant() switch
+        {
+            "US" => "US",
+            "EU" => "EU",
+            "KR" => "KR",
+            "TW" => "TW",
+            "CN" => "CN",
+            _ => "US"
+        };
+
+        var tagQuery = TagFilter.BuildTagQuery(tags, "enUS", region);
+        var filterBitmap = TagFilter.FilterInstallEntries(install, tagQuery);
+
         var tagFilteredEntries = new List<InstallManifest.InstallFileEntry>();
-        var tagIndexMap = new Dictionary<string, int>();
-        for (var i = 0; i < install.tags.Length; i++)
+        for (var i = 0; i < install.entries.Length; i++)
         {
-            tagIndexMap[install.tags[i].name] = i;
-        }
-        foreach (var entry in install.entries)
-        {
-            var checksOut = true;
-
-            foreach (var tag in tags)
-            {
-                if (tagIndexMap.TryGetValue(tag, out var tagIndex))
-                {
-                    if (!entry.tagIndices.Contains(tagIndex))
-                    {
-                        checksOut = false;
-                    }
-                }
-            }
-
-            if (checksOut)
-                tagFilteredEntries.Add(entry);
+            if (filterBitmap[i])
+                tagFilteredEntries.Add(install.entries[i]);
         }
 
-        //Parallel.ForEach(tagFilteredEntries, async void (installEntry) =>
+        // Resolve content hash → eKey for all entries first
+        var resolvedEntries = new List<(InstallManifest.InstallFileEntry entry, Hash eKey)>();
         foreach (var installEntry in tagFilteredEntries)
         {
-            if (!encoding.contentEntries.TryGetValue(installEntry.contentHash, out var contentEntry)) return;
+            if (!encoding.contentEntries.TryGetValue(installEntry.contentHash, out var contentEntry)) continue;
             var key = contentEntry.eKeys[0];
 
             var filePath = Path.Combine(shared_game_dir, installEntry.name);
-
             if (File.Exists(filePath) && !overrideFiles)
                 continue;
+
+            resolvedEntries.Add((installEntry, key));
+        }
+
+        // Phase 1: Parallel pre-download to cache
+        await AnsiConsole.Progress().StartAsync(async ctx =>
+        {
+            var task1 = ctx.AddTask($"[green]Pre-downloading {resolvedEntries.Count} install files[/]");
+            task1.MaxValue = resolvedEntries.Count;
+
+            await Parallel.ForEachAsync(resolvedEntries,
+                new ParallelOptions { MaxDegreeOfParallelism = 20 },
+                async (item, ct) =>
+                {
+                    await Data.PreDownloadToCache(item.eKey, cdn, cdnConfig, archiveGroup);
+                    task1.Increment(1);
+                });
+        });
+
+        // Phase 2: Sequential BLTE decode + file extraction (reads from cache)
+        foreach (var (installEntry, key) in resolvedEntries)
+        {
+            var filePath = Path.Combine(shared_game_dir, installEntry.name);
 
             byte[]? data = null;
 
@@ -346,61 +581,72 @@ public partial class Product
         DownloadManifest? download, CDN? cdn, CDNConfig? cdnConfig, Encoding? encoding,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup,
         ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? patchGroup, List<string>? tags,
-        string? data_dir, bool overrideFiles = false)
+        string? data_dir, HashSet<Hash>? artifactKeys = null, bool overrideFiles = false)
     {
         if (download == null)
             return;
 
         tags ??= [];
 
-        // Add locale tags
-        tags.Add("enUS");
-
-        ulong totalDownloadSize = 0;
-
-        var tagFilteredEntries = new List<DownloadManifest.DownloadEntry>();
-        var tagIndexMap = new Dictionary<string, int>();
-        for (var i = 0; i < download.tags.Length; i++)
+        // Derive region from branch
+        var region = _branch.ToUpperInvariant() switch
         {
-            tagIndexMap[download.tags[i].name] = i;
+            "US" => "US",
+            "EU" => "EU",
+            "KR" => "KR",
+            "TW" => "TW",
+            "CN" => "CN",
+            _ => "US"
+        };
+
+        var tagQuery = TagFilter.BuildTagQuery(tags, "enUS", region);
+        var filterBitmap = TagFilter.FilterDownloadEntries(download, tagQuery);
+
+        var downloadEntries = new List<DownloadManifest.DownloadEntry>();
+        for (var i = 0; i < download.entries.Length; i++)
+        {
+            if (!filterBitmap[i] || download.entries[i].priority is not (0 or 1 or 2))
+                continue;
+            // Agent artifact exclusion: skip entries already written as build config artifacts
+            if (artifactKeys != null && artifactKeys.Contains(download.entries[i].eKey))
+                continue;
+            // Agent skips entries with zero compressed size (nothing to download)
+            if (download.entries[i].size == 0)
+                continue;
+            downloadEntries.Add(download.entries[i]);
         }
 
-        foreach (var entry in download.entries)
-        {
-            var checksOut = true;
+        // Agent processes download entries grouped by priority (0, 1, 2) in manifest order within each group
+        downloadEntries = downloadEntries.OrderBy(e => e.priority).ToList();
 
-            foreach (var tag in tags)
-            {
-                if (tagIndexMap.TryGetValue(tag, out var tagIndex))
-                {
-                    if ((entry.tagIndices & (1 << tagIndex)) == 0)
-                    {
-                        checksOut = false;
-                        break;
-                    }
-                }
-            }
-
-            if (checksOut)
-                tagFilteredEntries.Add(entry);
-        }
-
+        // Phase 1: Parallel pre-download to cache
         await AnsiConsole.Progress().StartAsync(async ctx =>
         {
-            var length = tagFilteredEntries?.Count ?? 0;
-            var task1 = ctx.AddTask($"[green]Processing {length} download entries[/]");
-            task1.MaxValue = length;
+            var task1 = ctx.AddTask($"[green]Pre-downloading {downloadEntries.Count} files[/]");
+            task1.MaxValue = downloadEntries.Count;
 
-            foreach (var downloadEntry in tagFilteredEntries)
-            {
-                task1.Increment(1);
-                if (downloadEntry.priority is 0 or 1)
+            await Parallel.ForEachAsync(downloadEntries,
+                new ParallelOptions { MaxDegreeOfParallelism = 20 },
+                async (entry, ct) =>
                 {
-                    await DownloadAndWriteFile(downloadEntry.eKey, cdn, cdnConfig, archiveGroup, downloadEntry.size);
-                }
+                    await Data.PreDownloadToCache(entry.eKey, cdn, cdnConfig, archiveGroup);
+                    task1.Increment(1);
+                });
+        });
+
+        // Phase 2: Sequential write from cache (fast, local I/O only)
+        await AnsiConsole.Progress().StartAsync(async ctx =>
+        {
+            var task1 = ctx.AddTask($"[green]Writing {downloadEntries.Count} files to data archives[/]");
+            task1.MaxValue = downloadEntries.Count;
+
+            foreach (var entry in downloadEntries)
+            {
+                await DownloadAndWriteFile(entry.eKey, cdn, cdnConfig, archiveGroup, entry.size, truncateKey: true);
+                task1.Increment(1);
             }
         });
-        AnsiConsole.MarkupLine($"[bold green]Total download size: {totalDownloadSize}[/]");
+        AnsiConsole.MarkupLine($"[bold green]Download complete: {downloadEntries.Count} files[/]");
     }
 
     void BuildIDXMap(string dataDir)
@@ -444,9 +690,27 @@ public partial class Product
         }
     }
 
+    static async Task SaveConfigToInstall(Hash key, string? overrideFile, string dataDir)
+    {
+        if (key.IsEmpty()) return;
+        var saveDir = Path.Combine(dataDir, "config", key.KeyString![0..2], key.KeyString[2..4]);
+        var savePath = Path.Combine(saveDir, key.KeyString);
+        if (File.Exists(savePath)) return;
+        if (!Directory.Exists(saveDir)) Directory.CreateDirectory(saveDir);
+        if (overrideFile != null)
+            File.Copy(overrideFile, savePath);
+        else
+        {
+            // Config was already loaded from CDN; re-read from cache if available
+            var cachePath = Path.Combine("cache", "configs", key.KeyString);
+            if (File.Exists(cachePath))
+                File.Copy(cachePath, savePath);
+        }
+    }
+
     string _baseDir = "World of Warcraft";
 
-    async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size)
+    async Task DownloadAndWriteFile(Hash eKey, CDN? cdn, CDNConfig? cdnConfig, ConcurrentDictionary<Hash, ArchiveIndex.IndexEntry>? archiveGroup, ulong size, bool truncateKey = false)
     {
         var writeSize = size + 30;
         var bucket = Data.cascGetBucketIndex(eKey);
@@ -475,7 +739,7 @@ public partial class Product
             }
 
             var idxEntry = idx.Add(eKey, Working_Data.ID, (int)Working_Data.Offset, writeSize);
-            var actualSize = await Working_Data.WriteDataEntry(idxEntry, cdn, cdnConfig, archiveGroup);
+            var actualSize = await Working_Data.WriteDataEntry(idxEntry, cdn, cdnConfig, archiveGroup, truncateKey);
 
             // Update IDX entry with actual size if it differs from expected
             if (actualSize > 0 && actualSize != writeSize)
@@ -615,17 +879,19 @@ public partial class Product
         var path = Path.Combine(gameDir, ".build.info");
 
         _buildInfo = new BuildInfo(path);
+        // Use original CDN info (not local override) for .build.info
+        var cdnLocal = _cdn as CDNLocal;
         var build = new BuildInfo.Build
         {
             Branch = _cdn?.Name,
             Active = 1,
             BuildKey = _version?.BuildConfigHash ?? new Hash(),
             CDNKey = _version?.CdnConfigHash ?? new Hash(),
-            InstallKey = _buildConfig?.Install[1] ?? new Hash(),
+            InstallKey = new Hash(), // Agent leaves this empty
             IMSize = -1,
             CDNPath = _cdn?.Path,
-            CDNHosts = _cdn?.Hosts,
-            CDNServers = _cdn?.Servers,
+            CDNHosts = cdnLocal?.OriginalHosts ?? _cdn?.Hosts,
+            CDNServers = cdnLocal?.OriginalServers ?? _cdn?.Servers,
             Tags = BuildDynamicTags(),
             Armadillo = _productConfig?.all?.config?.decryption_key_name ?? "",
             LastActivated = "",

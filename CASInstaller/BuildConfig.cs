@@ -36,7 +36,14 @@ public struct BuildConfig
     public string[] PatchIndexSize;
     public Hash[] VfsRoot;
     public string[] VfsRootSize;
+    public List<VfsManifestEntry> VfsEntries;
     public bool PlainMode;
+
+    public struct VfsManifestEntry
+    {
+        public Hash EKey;
+        public int EncodedSize;
+    }
 
     public BuildConfig(byte[] data)
     {
@@ -49,6 +56,8 @@ public struct BuildConfig
         }
 
         var lines = content.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
+        var vfsRaw = new Dictionary<string, string>();
+        var vfsSizeRaw = new Dictionary<string, string>();
 
         foreach (var t in lines)
         {
@@ -180,9 +189,33 @@ public struct BuildConfig
                     VfsRootSize = cols[1].Split(' ');
                     break;
                 default:
-                    //Console.WriteLine("Unknown build config key: " + cols[0]);
+                    if (cols[0]!.StartsWith("vfs-") && !cols[0]!.EndsWith("-size"))
+                    {
+                        vfsRaw[cols[0]!] = cols[1]!;
+                    }
+                    else if (cols[0]!.StartsWith("vfs-") && cols[0]!.EndsWith("-size"))
+                    {
+                        vfsSizeRaw[cols[0]!.Replace("-size", "")] = cols[1]!;
+                    }
                     break;
             }
+        }
+
+        // Resolve VFS entries
+        VfsEntries = [];
+        foreach (var (key, value) in vfsRaw)
+        {
+            var parts = value.Split(' ');
+            if (parts.Length < 2) continue;
+            var eKey = new Hash(parts[1]);
+            var encodedSize = 0;
+            if (vfsSizeRaw.TryGetValue(key, out var sizeVal))
+            {
+                var sizeParts = sizeVal.Split(' ');
+                if (sizeParts.Length >= 2)
+                    int.TryParse(sizeParts[1], out encodedSize);
+            }
+            VfsEntries.Add(new VfsManifestEntry { EKey = eKey, EncodedSize = encodedSize });
         }
 
         PlainMode = Encoding == null || Encoding.Length < 2;

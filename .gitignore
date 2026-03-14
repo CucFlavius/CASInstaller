@@ -396,5 +396,9 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
 CLAUDE.md
 productConfig.json
+
+cache/*
+install.txt
