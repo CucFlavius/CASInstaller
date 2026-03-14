@@ -2,6 +2,80 @@
 
 internal abstract class Program
 {
+    private static async Task ListTags(string product, string branch,
+        string? overrideHosts, string? localCdnPath,
+        string? overrideCdnConfig, string? overrideCdnConfigFile,
+        string? overrideBuildConfig, string? overrideBuildConfigFile)
+    {
+        BLTE.BLTEStream.ThrowOnMissingDecryptionKey = false;
+        KeyService.LoadKeys();
+
+        CDN? cdn;
+        if (string.IsNullOrEmpty(localCdnPath))
+            cdn = await CDNOnline.GetCDN(product, branch);
+        else
+            cdn = new CDNLocal(product, localCdnPath);
+
+        if (cdn == null) { Console.WriteLine("Failed to get CDN info."); return; }
+        if (overrideHosts != null) cdn.Hosts = overrideHosts.Split(' ');
+
+        var version = await Version.GetVersion(product, branch);
+        if (version == null) { Console.WriteLine("Failed to get version info."); return; }
+
+        if (overrideCdnConfig != null) version.CdnConfigHash = new Hash(overrideCdnConfig);
+        else if (overrideCdnConfigFile != null) version.CdnConfigHash = new Hash(Path.GetFileName(overrideCdnConfigFile));
+        if (overrideBuildConfig != null) version.BuildConfigHash = new Hash(overrideBuildConfig);
+        else if (overrideBuildConfigFile != null) version.BuildConfigHash = new Hash(Path.GetFileName(overrideBuildConfigFile));
+
+        var productConfig = await ProductConfig.GetProductConfig(cdn, version.ProductConfigHash);
+        if (!string.IsNullOrEmpty(productConfig?.all?.config?.decryption_key_name))
+            ArmadilloCrypt.Init(productConfig.all.config.decryption_key_name);
+
+        BuildConfig buildConfig;
+        if (overrideBuildConfigFile != null)
+            buildConfig = new BuildConfig(await File.ReadAllBytesAsync(overrideBuildConfigFile));
+        else
+            buildConfig = await BuildConfig.GetBuildConfig(cdn, version.BuildConfigHash, null);
+
+        Console.WriteLine($"Product: {product}  Branch: {branch}  Version: {version.VersionsName}");
+        Console.WriteLine();
+
+        // Download manifest tags
+        if (buildConfig.Download != null)
+        {
+            var download = await DownloadManifest.GetDownload(cdn, buildConfig.Download[^1]);
+            if (download != null)
+            {
+                Console.WriteLine($"Download Manifest Tags ({download.tags.Length}):");
+                foreach (var tag in download.tags)
+                {
+                    var count = 0;
+                    for (var j = 0; j < tag.bitmap.Length; j++)
+                        if (tag.bitmap[j]) count++;
+                    Console.WriteLine($"  {tag.name,-30} type=0x{tag.type:X4}  entries={count}");
+                }
+                Console.WriteLine();
+            }
+        }
+
+        // Install manifest tags
+        if (buildConfig.Install != null)
+        {
+            var install = await InstallManifest.GetInstall(cdn, buildConfig.Install[^1]);
+            if (install != null)
+            {
+                Console.WriteLine($"Install Manifest Tags ({install.tags.Length}):");
+                foreach (var tag in install.tags)
+                {
+                    var count = 0;
+                    for (var j = 0; j < tag.bitmap.Length; j++)
+                        if (tag.bitmap[j]) count++;
+                    Console.WriteLine($"  {tag.name,-30} type=0x{tag.type:X4}  entries={count}");
+                }
+            }
+        }
+    }
+
     private static async Task Main(string[] args)
     {
         string? _product = null;
@@ -13,6 +87,7 @@ internal abstract class Program
         string? _overrideBuildConfigFile = null;
         string? _overrideHosts = null;
         string? _localCdnPath = null;
+        bool _listTags = false;
 
         if (args.Length == 0)
         {
@@ -63,6 +138,9 @@ internal abstract class Program
                 case "--local-cdn-path":
                     _localCdnPath = args[++i];
                     break;
+                case "--list-tags":
+                    _listTags = true;
+                    break;
             }
         }
 
@@ -74,6 +152,14 @@ internal abstract class Program
 
         _installPath ??= "";
         _branch ??= "us";
+
+        if (_listTags)
+        {
+            await ListTags(_product, _branch, _overrideHosts, _localCdnPath,
+                _overrideBuildConfig, _overrideBuildConfigFile,
+                _overrideCdnConfig, _overrideCdnConfigFile);
+            return;
+        }
 
         // Install the game
         var game_settings = new Product.InstallSettings()
