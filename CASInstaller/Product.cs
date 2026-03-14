@@ -107,6 +107,22 @@ public partial class Product
                 _buildConfig = await BuildConfig.GetBuildConfig(_cdn, _version.BuildConfigHash, _data_dir);
             //_buildConfig?.LogInfo();
 
+            // Old builds (pre-8.2.0, before Classic launch) didn't use the shared container
+            // subfolder structure (_retail_/_classic_/etc). The exe expected Data/ next to it.
+            // The product config from the live CDN always has shared_container_default_subfolder
+            // set, so override it for old builds where the subfolder didn't exist.
+            if (_shared_game_dir != _game_dir && _buildConfig != null)
+            {
+                var buildVersion = GetBuildVersion();
+                if (buildVersion != null && IsPreSharedContainerBuild(buildVersion))
+                {
+                    AnsiConsole.MarkupLine($"[yellow]Old build {buildVersion} detected -- installing without shared container subfolder[/]");
+                    _shared_game_dir = _game_dir;
+                    if (!Directory.Exists(_shared_game_dir))
+                        Directory.CreateDirectory(_shared_game_dir!);
+                }
+            }
+
             if (_installSettings.OverrideCDNConfigFile != null)
                 _cdnConfig = new CDNConfig(System.Text.Encoding.UTF8.GetString(await File.ReadAllBytesAsync(_installSettings.OverrideCDNConfigFile)));
             else
@@ -1126,6 +1142,21 @@ public partial class Product
 
         _buildInfo.AddBuild(build);
         _buildInfo.Write(path);
+    }
+
+    /// <summary>
+    /// Returns true if the build predates the shared container subfolder structure
+    /// (_retail_/_classic_/etc), which was introduced around WoW 8.2.0 when Classic
+    /// launched alongside Retail (August 2019).
+    /// </summary>
+    static bool IsPreSharedContainerBuild(string version)
+    {
+        var parts = version.Split('.');
+        if (parts.Length < 3) return false;
+        if (!int.TryParse(parts[0], out var major)) return false;
+        if (!int.TryParse(parts[1], out var minor)) return false;
+        // 8.2.0 and later use the subfolder; anything before doesn't
+        return major < 8 || (major == 8 && minor < 2);
     }
 
     /// <summary>
