@@ -1,7 +1,7 @@
 !Still in development
 
 - The application attempts to download and install a game from the blizzard cdn (or your own), without using agent
-- Currently only tested with wow_classic_era because that was small enough for debugging purposes
+- Currently tested with wow/wow_classic_ptr (modern clients) and an old BfA client
 
 ## Command-Line Arguments
 
